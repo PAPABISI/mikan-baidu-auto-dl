@@ -1,29 +1,28 @@
-# 蜜柑追番 + 百度网盘自动化
+# mikan-baidu-auto-dl
 
-每周一 10:00 自动从蜜柑检查追番列表中的新集，筛选偏好的字幕组与语言，调用百度网盘离线下载接口入盘。配套 Web 控制台用于增删追番、看进度、手动触发。
+> 蜜柑追番 + 百度网盘自动化：每周检查追番列表新集，调用百度网盘离线下载接口入盘。配套 Web 控制台用于增删追番、看进度、手动触发。
 
----
+## 为什么造这个轮子
 
-## 项目结构
+GitHub 上现有追番工具（AutoBangumi、Alist-MikananiRss 等）几乎都走 qBittorrent/aria2 + 本地 NAS 的架构。但如果你只想把番塞进**百度网盘**离线下载——不需要 NAS、不需要 BT 客户端、就是想用网盘会员那点配额——这条路没人铺。
 
-```
-.
-├── 追番列表.json              # 配置文件（数据驱动）
-├── auto_dl.py                 # 主入口：每周触发，调百度离线下载接口
-├── qr_cloud_dl.py             # 扫码登录，获取/续命 BDUSS
-├── parse_mikan.py             # 蜜柑详情页解析器（独立可复用）
-├── web_app.py                 # Web 后端（待实现）⚠
-├── static/index.html          # Web 前端（待实现）⚠
-├── .gitignore
-├── README.md                  # 本文件
-└── .workbuddy/                # 工作区元数据（已 gitignore）
-```
+本仓库就是铺这条路：**直接调百度网盘 web API 的 `cloud_dl.add_task`**，不依赖任何外部下载器。
+
+## 特性
+
+- **配置驱动**：所有追番项写在 `追番列表.json`，改文件即调整行为
+- **零外部依赖**：标准库实现，PyPI 不可达也能跑（实测 PyPI 走默认沙箱代理全 502）
+- **登录态策略 B**：扫码一次拿到 `BDUSS` 后缓存到 `.baidu_cookies.json`，跑前自检，失效才需再扫
+- **增量抓取**：每次只处理比 `last_episode` 更新的话
+- **状态分桶**：`QRCODE_NEEDED` / `NET_ERROR` / `NO_UPDATES` / `OK` / `GENERIC`，便于上层 automation 做差异化通知
+- **蜜柑走 Clash 代理 + 百度走直连**：两套网络通道，互不干扰
+- **配套 Web 控制台**（开发中）：增删追番、看进度、手动触发
 
 ## 架构
 
 ```
 ┌──────────────────────────────────────────────┐
-│  Web UI (localhost:8765)                      │  ← 用户浏览器
+│  Web UI (localhost:8765)                      │
 │  vanilla HTML + fetch                         │
 └──────────────────────────────────────────────┘
               ↕ fetch 同源
@@ -39,7 +38,7 @@
          追番列表.json
               ↑
 ┌──────────────────────────────────────────────┐
-│  auto_dl.py  (automation 每周一 10:00 触发)   │
+│  auto_dl.py  (定时触发，可由 cron / automation 驱动) │
 │  1. 自检 BDUSS (gettemplatevariable)          │
 │  2. 失效 → QRCODE_NEEDED（通知用户扫码）     │
 │  3. 遍历追番列表 → 抓蜜柑详情页               │
@@ -48,11 +47,76 @@
 │  6. 回读任务状态 → 更新清单 → 清理临时文件     │
 └──────────────────────────────────────────────┘
               ↕
-┌──────────────────────────────────────────────┐
-│  百度网盘（BDUSS 直连，走 web API）           │
-│  ├ /api/gettemplatevariable → 自检 + bd(tok) │
-│  └ /rest/2.0/services/cloud_dl → 任务调度     │
-└──────────────────────────────────────────────┘
+         百度网盘 web API
+```
+
+## 安装
+
+```bash
+git clone https://github.com/PAPABISI/mikan-baidu-auto-dl.git
+cd mikan-baidu-auto-dl
+```
+
+需要 Python 3.11+（仅用标准库，无需 pip install）。
+
+## 使用
+
+### 1. 扫码登录获取 BDUSS
+
+```bash
+python qr_cloud_dl.py
+```
+
+会生成 `login_qr.png`，用手机百度/网盘 App 扫码即写入 `.baidu_cookies.json`。
+
+### 2. 配置追番列表
+
+编辑 `追番列表.json`：
+
+```json
+{
+  "series": [
+    {
+      "mikan_id": 4059,
+      "name": "FX战士久留美",
+      "subtitle_groups": ["绿茶字幕组"],
+      "language": "简体",
+      "embedded_only": true,
+      "save_path": "/FX战士久留美",
+      "last_episode": "0"
+    }
+  ]
+}
+```
+
+`mikan_id` 是蜜柑详情页 URL 末尾的数字，如 `https://mikanani.me/Home/Bangumi/4059` → `4059`。
+
+### 3. 手动触发一次
+
+```bash
+python auto_dl.py
+```
+
+### 4. 定时触发
+
+用 cron 或任意调度器定时执行 `python auto_dl.py`，例如每周一 10:00：
+
+```cron
+0 10 * * 1 cd /path/to/mikan-baidu-auto-dl && python auto_dl.py
+```
+
+## 项目结构
+
+```
+.
+├── 追番列表.json               # 配置文件（数据驱动）
+├── auto_dl.py                  # 主入口：定时触发
+├── qr_cloud_dl.py              # 扫码登录，获取/续命 BDUSS
+├── parse_mikan.py              # 蜜柑详情页解析器
+├── web_app.py                  # Web 后端（待实现）⚠
+├── static/index.html          # Web 前端（待实现）⚠
+├── LICENSE
+└── README.md
 ```
 
 ## 数据模型
@@ -75,129 +139,79 @@
       "last_check_detail": null,
       "cover_url": null,
       "added_at": "2026-10-25",
-      "notes": "绿茶字幕组唯一三话齐全，01有v2修正版"
+      "notes": ""
     }
   ]
 }
 ```
 
-## 运行时网络
+## 运行要求
 
-- **蜜柑**：走 Clash `127.0.0.1:7897`（详见 [网络拓扑](#网络拓扑)）
-- **百度网盘接口**：直连
-- **前端 → 后端**：localhost 同源
-
-## 网络拓扑
-
-```
-Web 后端进程 ──┬──→ Clash 7897 ──→ 蜜柑
-              └──→ 直连 ────→ 百度网盘 web API
-                                            ↑
-                                   .baidu_cookies.json 里的 BDUSS
-```
-
-## 关键技术决定
-
-1. **零外部依赖**：PyPI 不可达，全程 Python 标准库实现
-2. **登录态策略 B**：缓存 BDUSS 在 `.baidu_cookies.json`（gitignored），跑前自检，失效才扫码
-3. **文件锁**：web_app.py 和 auto_dl.py 都改 `追番列表.json`，用 `msvcrt.locking` 排他锁
-4. **状态分桶**：`QRCODE_NEEDED` / `NET_ERROR` / `NO_UPDATES` / `OK` / `GENERIC`，便于 automation 做差异化通知
-5. **automation 仅做触发**：实际工作由本地 Python 脚本完成，automation 触发后读取 `.auto_dl_state.json` 向用户汇报
-
-## 安装与运行
-
-### 一次性：扫码登录获取 BDUSS
-
-```bash
-python qr_cloud_dl.py
-```
-
-会生成 `login_qr.png`，手机百度/网盘 App 扫码即写入 `.baidu_cookies.json`。
-
-### 手动触发一次追番流水线
-
-```bash
-python auto_dl.py
-```
-
-### 启动 Web 控制台
-
-```bash
-python web_app.py
-# 默认监听 http://localhost:8765
-```
-
-### automation（已挂载）
-
-- **名称**：每周追番自动化
-- **触发**：`FREQ=WEEKLY;BYDAY=MO;BYHOUR=10;BYMINUTE=0`
-- **automation ID**：`82fae53d-e045-49e8-84e3-a80e23bdea42`
-
-## 进度记录
-
-### 已完成
-
-- [x] 蜜柑详情页解析器（`parse_mikan.py`）
-- [x] 扫码登录模块（`qr_cloud_dl.py`，纯标准库）
-- [x] 主脚本自检、抓取、筛选、提交、回读、状态分桶（`auto_dl.py`）
-- [x] 配置文件设计（`追番列表.json`）
-- [x] automation 挂载，下次触发约一周后
-
-### 进行中
-
-- [ ] Web 控制台（`web_app.py`、`static/index.html`）
-
-### 待办
-
-- [ ] 文件锁封装（msvcrt）
-- [ ] 入口 `.bat`：双击启动 web + 浏览器
-- [ ] 登录态失效检测：定时体检，提前通知
-- [ ] 失败重试策略：QRCODE_NEEDED 不算失败，NET_ERROR 自动重试一次
+- Python 3.11+
+- 一个能访问 [mikanani.me](https://mikanani.me) 的本地代理（例如 Clash for Windows，监听在 `127.0.0.1:7897`）。蜜柑经常遭到 DNS 污染。
+- 百度网盘账号（普通账号即可，会员可享有更大的离线下载配额）
+- Cloudflare 不影响
 
 ## 已知限制
 
 1. **登录态会过期**：BDUSS 通常几天到几周失效，过期后必须人工扫码。这是百度的设计，无法绕开。
 2. **版权哈希过滤**：热门番剧的磁力可能被百度秒失败或文件改名 `.bak`，无法控制，只能事后如实汇报。
 3. **蜜柑依赖页面结构**：HTML 选择器变化会让解析器失效，需要不定期维护。
-4. **单进程**：`http.server` 单线程;用线程池处理并发请求。
-5. **网盘子目录列目录有时 errno:1002**：MCP connector 限制，web 后端用 web API 直连规避。
+4. **单进程**：`http.server` 单线程，用线程池处理并发请求。
+5. **`baidupcsapi` 不可达**：本仓库之所以从零搭，就是因为 PyPI 上的 `baidupcsapi` 历史项目不可达，且我们走的是 web API 不是 PCS API。
 
 ## 失败处理
 
 `auto_dl.py` 写出的 `.auto_dl_state.json` 字段 `status`：
 
-| status | 含义 | automation 行为 |
-|---|---|---|
-| `QRCODE_NEEDED` | 登录态失效 | 通知用户扫码 |
-| `NET_ERROR` | 网络/代理问题 | 通知用户检查 Clash |
-| `NO_UPDATES` | 本周无新话 | 简要说明 |
-| `OK` | 提交成功 | 列出每话 errno 和 task_status |
-| `GENERIC` | 其他错误 | 通知并附错误信息 |
+| status | 含义 |
+|---|---|
+| `QRCODE_NEEDED` | 登录态失效，需扫码 |
+| `NET_ERROR` | 网络/代理问题 |
+| `NO_UPDATES` | 本周无新话 |
+| `OK` | 提交成功 |
+| `GENERIC` | 其他错误 |
 
-## 浏览器/Chrome 调试的限制（历史教训）
+## 路线图
 
-- Chrome 155 cookie 用 v20 app-bound 加密，绑定安装路径+原始配置目录；复制配置到别处后 Chrome 自身也解不出 cookie，CDP 导出路线作废。
-- Chrome 禁止对默认配置目录开 `--remote-debugging-port`，真身接管也不可行。
-- Edge 仍用 v10，可纯本地解密；但用户需要先在 Edge 登录且 Edge 关闭（cookie 文件不被进程占用）。
-- 当前生产用的路线是 passport.baidu.com 扫码登录，绕开上述所有浏览器侧问题。
+### 已完成
 
-## 维护手册
+- [x] 蜜柑详情页解析器
+- [x] 扫码登录模块
+- [x] 主脚本（自检/抓取/筛选/提交/回读/状态分桶）
+- [x] 配置文件设计
+- [x] GitHub 仓库初始化
+- [x] README + LICENSE
 
-### 加新番
+### 进行中
 
-在 Web 上搜索 → 选字幕组 → 保存。或直接编辑 `追番列表.json` 加对象。
-新增后下次周一才会被自动追，要立即抓可在 Web 上点"立即检查"。
+- [ ] Web 控制台（CRUD + 搜索 + 手动触发）
 
-### 换字幕组偏好
+### 待办
 
-编辑 `追番列表.json` 对应条目的 `subtitle_groups` 数组。
+- [ ] 文件锁封装（msvcrt）
+- [ ] 入口 .bat：双击启动 web + 浏览器
+- [ ] 登录态定时体检
+- [ ] 失败重试策略
 
-### 退坑
+## 借鉴的项目
 
-Web 上点退坑，或从 `追番列表.json` 删对象。**不会**删除网盘里已下载的文件。
+调研中没有直接复用代码，但借鉴了思路：
 
-### 登录态续命
+- **AutoBangumi** (8.3k★) — 清晰分层：抓取/解析/提交/汇报
+- **Alist-MikananiRss** (126★) — LLM 重命名思路（未来可加，让 Emby/Jellyfin 识别）
+- **baidu-autosave** — 百度网盘登录态自检（与应用方向不同，不直接用）
 
-收到 QRCODE_NEEDED 通知后：
-1. `python qr_cloud_dl.py` 生成 `login_qr.png`
-2. 手机扫码即写入 `.baidu_cookies.json`
+## 设计取舍
+
+| 选择 | 原因 |
+|---|---|
+| 详情页爬取，不用 RSS | RSS 要蜜柑账号订阅，本仓库零账号即可 |
+| PyPI 装不了，用标准库 | 实测默认沙箱代理 + Clash 7897 + 系统出口都打不通 PyPI |
+| 不依赖外部 BT 客户端 | 目标就是塞进百度网盘，不搭 NAS |
+| 不接通知渠道（PushPlus 等） | 由上层调度器（cron/WorkBuddy automation）处理通知 |
+| 蜜柑走 Clash 7897，百度直连 | 两个域名互不可达 |
+
+## License
+
+MIT
