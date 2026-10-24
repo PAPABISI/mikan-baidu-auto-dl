@@ -1,0 +1,31 @@
+# 敏感凭证（含百度 BDUSS 登录态，绝不能进版本库）
+.baidu_cookies.json
+baidu_keys.json
+
+# 运行时产物
+.auto_dl_state.json
+login_qr.png
+run_log_*.json
+
+# 浏览器配置副本
+.chrome_copy/
+.edge_copy/
+.chrome_dump/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+
+# WorkBuddy 自身目录
+.workbuddy/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
