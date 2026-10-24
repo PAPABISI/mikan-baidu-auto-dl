@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>蜜柑追番 · 控制台</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --panel-2: #1c2129;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --accent-2: #3fb950;
+  --warn: #d29922;
+  --err: #f85149;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  min-height: 100vh;
+  padding: 24px;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+header h1 { font-size: 20px; font-weight: 600; }
+header h1 .accent { color: var(--accent); }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+button:hover { border-color: var(--accent); }
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+button.primary:hover { background: #4f9bf8; }
+button.danger:hover { border-color: var(--err); color: var(--err); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.banner {
+  background: var(--warn);
+  color: #1a1a1a;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  font-weight: 500;
+  display: none;
+}
+.banner.show { display: block; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.card .cover {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  background: var(--panel-2);
+  display: block;
+}
+.card .placeholder {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  font-size: 24px;
+}
+.card .body { padding: 12px; }
+.card .name {
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 6px;
+}
+.card .meta {
+  font-size: 12px;
+  color: var(--text-dim);
+  display: flex;
+  justify-content: space-between;
+}
+.card .meta .ep { color: var(--accent-2); font-weight: 600; }
+.card .status {
+  margin-top: 6px;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  display: inline-block;
+}
+.status.OK { color: var(--accent-2); }
+.status.QRCODE_NEEDED, .status.NET_ERROR, .status.GENERIC { color: var(--err); }
+.status.NO_UPDATES, .status.NEVER { color: var(--text-dim); }
+
+.empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-dim);
+}
+.empty .big { font-size: 48px; margin-bottom: 12px; }
+
+/* 模态 */
+.modal-bg {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+.modal-bg.show { display: flex; }
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 720px;
+  width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.modal h2 { font-size: 18px; margin-bottom: 16px; }
+.modal .search-bar {
+  display: flex; gap: 8px; margin-bottom: 16px;
+}
+.modal input[type=text] {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 14px;
+}
+.modal input[type=text]:focus { outline: none; border-color: var(--accent); }
+.search-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.search-result {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: all 0.15s;
+}
+.search-result:hover { border-color: var(--accent); }
+.search-result.selected { border-color: var(--accent-2); background: rgba(63, 185, 80, 0.1); }
+.search-result img { width: 100%; aspect-ratio: 3/4; object-fit: cover; display: block; background: var(--panel-2); }
+.search-result .name { padding: 8px; font-size: 12px; }
+
+.bangumi-info {
+  background: var(--panel-2);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 16px;
+  display: none;
+}
+.bangumi-info.show { display: block; }
+.bangumi-info table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.bangumi-info th, .bangumi-info td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.bangumi-info th { color: var(--text-dim); font-weight: normal; }
+
+.prefs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.prefs label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+.prefs input, .prefs select {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.modal .actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.loading { text-align: center; padding: 20px; color: var(--text-dim); }
+.loading::after {
+  content: '...';
+  display: inline-block;
+  animation: dots 1.5s infinite;
+}
+@keyframes dots {
+  0%, 20% { content: '.'; }
+  40% { content: '..'; }
+  60%, 100% { content: '...'; }
+}
+
+/* 详情面板 */
+.detail {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-top: 24px;
+  display: none;
+}
+.detail.show { display: block; }
+.detail h2 { font-size: 18px; margin-bottom: 12px; }
+.detail .pan-list {
+  margin-top: 12px;
+  background: var(--panel-2);
+  border-radius: var(--radius);
+  padding: 8px;
+  font-size: 13px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.detail .pan-list .file { padding: 4px 8px; border-radius: 4px; }
+.detail .pan-list .file:hover { background: var(--panel); }
+.detail .pan-list .file .size { color: var(--text-dim); float: right; font-size: 11px; }
+
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  max-width: 320px;
+  z-index: 200;
+  display: none;
+  animation: slideIn 0.3s;
+}
+.toast.show { display: block; }
+.toast.error { border-color: var(--err); color: var(--err); }
+.toast.ok { border-color: var(--accent-2); color: var(--accent-2); }
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>蜜柑追番 <span class="accent">·</span> 百度网盘自动化</h1>
+  <div class="toolbar">
+    <button id="btn-refresh">立即检查</button>
+    <button id="btn-qr" class="primary">扫码登录</button>
+    <button id="btn-add" class="primary">添加追番</button>
+  </div>
+</header>
+
+<div id="banner" class="banner"></div>
+
+<div id="empty" class="empty" style="display:none">
+  <div class="big">📺</div>
+  <div>还没有追番，点右上角"添加追番"开始</div>
+</div>
+
+<div id="grid" class="grid"></div>
+
+<div id="detail" class="detail"></div>
+
+<!-- 添加追番模态 -->
+<div id="modal-add" class="modal-bg">
+  <div class="modal">
+    <h2>添加追番</h2>
+    <div class="search-bar">
+      <input type="text" id="search-input" placeholder="输入番名，回车搜索（如：FX战士久留美）">
+      <button id="btn-search">搜索</button>
+    </div>
+    <div id="search-loading" class="loading" style="display:none">搜索中</div>
+    <div id="search-results" class="search-results"></div>
+    <div id="bangumi-info" class="bangumi-info"></div>
+    <div id="prefs" class="prefs" style="display:none">
+      <div>
+        <label>字幕组（逗号分隔，按优先级）</label>
+        <input type="text" id="pref-groups" placeholder="如：绿茶字幕组">
+      </div>
+      <div>
+        <label>语言</label>
+        <select id="pref-lang">
+          <option value="简体">简体</option>
+          <option value="繁体">繁体</option>
+          <option value="简繁">简繁</option>
+        </select>
+      </div>
+      <div>
+        <label>类型</label>
+        <select id="pref-embed">
+          <option value="true">仅内嵌</option>
+          <option value="false">含外挂</option>
+        </select>
+      </div>
+      <div>
+        <label>网盘保存路径</label>
+        <input type="text" id="pref-path" placeholder="/番名">
+      </div>
+    </div>
+    <div class="actions">
+      <button id="btn-cancel">取消</button>
+      <button id="btn-save" class="primary" disabled>保存追番</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => document.querySelectorAll(s);
+
+let selected = null; // {id, name, cover}
+
+async function api(path, method='GET', body=null) {
+  const opts = {method, headers: {'Content-Type': 'application/json'}};
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+function toast(msg, type='') {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + type;
+  setTimeout(() => el.className = 'toast ' + type, 3000);
+}
+
+function statusText(s) {
+  return {OK:'成功', QRCODE_NEEDED:'需扫码', NET_ERROR:'网络错误', NO_UPDATES:'无新话',
+          GENERIC:'异常', NEVER:'未运行'}[s] || s || '未运行';
+}
+
+// 加载追番列表
+async function loadSeries() {
+  const d = await api('/api/series');
+  const series = d.series || [];
+  if (!series.length) {
+    $('#grid').innerHTML = '';
+    $('#empty').style.display = 'block';
+    return;
+  }
+  $('#empty').style.display = 'none';
+  $('#grid').innerHTML = series.map((s, i) => `
+    <div class="card" onclick="showDetail(${i})">
+      ${s.cover_url
+        ? `<img class="cover" src="${s.cover_url}" onerror="this.outerHTML='<div class=placeholder>📺</div>'">`
+        : `<div class="placeholder">📺</div>`}
+      <div class="body">
+        <div class="name">${s.name}</div>
+        <div class="meta">
+          <span>第 <span class="ep">${s.last_episode || '0'}</span> 话</span>
+          <span>${(s.subtitle_groups||[]).join('，') || '全部'}</span>
+        </div>
+        <div class="status ${s.last_check_status || 'NEVER'}">${statusText(s.last_check_status)}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// 卡片点击展开详情
+async function showDetail(idx) {
+  const d = await api('/api/series');
+  const s = (d.series || [])[idx];
+  if (!s) return;
+  const detail = $('#detail');
+  detail.classList.add('show');
+  detail.innerHTML = `<h2>${s.name}</h2>
+    <div class="meta">
+      蜜柑 #${s.mikan_id} · 字幕组: ${s.subtitle_groups.join('，') || '不限'}
+      · 语言: ${s.language} · 保存: ${s.save_path}
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button onclick="scanPan('${s.save_path}')">扫描网盘</button>
+      <button class="danger" onclick="deleteSeries(${idx})">退坑</button>
+    </div>
+    <div id="pan-list" class="pan-list"></div>`;
+}
+
+async function scanPan(path) {
+  $('#pan-list').innerHTML = '<div class="loading">扫描中</div>';
+  const d = await api('/api/pan/ls?path=' + encodeURIComponent(path));
+  if (d.errno !== 0) {
+    $('#pan-list').innerHTML = `<div style="color:var(--err)">扫描失败: ${d.errmsg || d.errno}</div>`;
+    return;
+  }
+  const files = d.files || [];
+  if (!files.length) {
+    $('#pan-list').innerHTML = '<div style="color:var(--text-dim)">目录为空（可能磁力还在下载）</div>';
+    return;
+  }
+  $('#pan-list').innerHTML = files.map(f => `
+    <div class="file">
+      ${f.isdir ? '📁' : '📄'} ${f.name}
+      ${f.size ? `<span class="size">${formatSize(f.size)}</span>` : ''}
+    </div>`).join('');
+}
+
+function formatSize(b) {
+  if (!b) return '';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return b.toFixed(1) + ' ' + u[i];
+}
+
+async function deleteSeries(idx) {
+  if (!confirm('确定退坑？网盘里已下载的文件不会被删除。')) return;
+  await api('/api/series/' + idx, 'DELETE');
+  toast('已退坑', 'ok');
+  $('#detail').classList.remove('show');
+  loadSeries();
+}
+
+// 立即检查
+async function refresh() {
+  const btn = $('#btn-refresh');
+  btn.disabled = true;
+  btn.textContent = '检查中...';
+  try {
+    const d = await api('/api/refresh', 'POST');
+    toast(`完成: ${statusText(d.status)} ${d.msg || ''}`,
+          d.status === 'OK' || d.status === 'NO_UPDATES' ? 'ok' : 'error');
+    loadSeries();
+  } catch (e) {
+    toast('请求失败: ' + e, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '立即检查';
+  }
+}
+
+// 扫码登录
+async function scanQr() {
+  const d = await api('/api/scan-qr', 'POST');
+  toast(d.ok ? '已生成二维码，请查看 login_qr.png 扫码' : '失败: ' + d.error,
+        d.ok ? 'ok' : 'error');
+}
+
+// 加番模态
+function openModal() {
+  selected = null;
+  $('#search-input').value = '';
+  $('#search-results').innerHTML = '';
+  $('#bangumi-info').classList.remove('show');
+  $('#prefs').style.display = 'none';
+  $('#btn-save').disabled = true;
+  $('#modal-add').classList.add('show');
+  $('#search-input').focus();
+}
+function closeModal() { $('#modal-add').classList.remove('show'); }
+
+async function doSearch() {
+  const q = $('#search-input').value.trim();
+  if (!q) return;
+  $('#search-loading').style.display = 'block';
+  $('#search-results').innerHTML = '';
+  try {
+    const d = await api('/api/mikan/search?q=' + encodeURIComponent(q));
+    const r = d.results || [];
+    if (!r.length) {
+      $('#search-results').innerHTML = '<div style="color:var(--text-dim)">无结果</div>';
+      return;
+    }
+    $('#search-results').innerHTML = r.map(it => `
+      <div class="search-result" onclick="selectResult(${it.id}, '${it.name.replace(/'/g, "\\'")}', '${it.cover}')">
+        <img src="${it.cover}" onerror="this.style.display='none'">
+        <div class="name">${it.name}</div>
+      </div>`).join('');
+  } catch (e) {
+    toast('搜索失败: ' + e, 'error');
+  } finally {
+    $('#search-loading').style.display = 'none';
+  }
+}
+
+async function selectResult(id, name, cover) {
+  $$('.search-result').forEach(el => el.classList.remove('selected'));
+  event.currentTarget.classList.add('selected');
+  selected = {id, name, cover};
+
+  $('#bangumi-info').innerHTML = '<div class="loading">解析详情</div>';
+  $('#bangumi-info').classList.add('show');
+  try {
+    const d = await api('/api/mikan/bangumi/' + id);
+    const groups = d.groups || [];
+    if (!groups.length) {
+      $('#bangumi-info').innerHTML = '<div style="color:var(--text-dim)">无资源</div>';
+      return;
+    }
+    // 默认选资源最多的字幕组
+    const best = groups.slice().sort((a,b) => b.count - a.count)[0];
+    $('#pref-groups').value = best.group;
+    $('#pref-path').value = '/' + name;
+    $('#bangumi-info').innerHTML = `
+      <table>
+        <thead><tr><th>字幕组</th><th>语言</th><th>类型</th><th>话数</th></tr></thead>
+        <tbody>
+          ${groups.map(g => `<tr>
+            <td>${g.group}</td><td>${g.language}</td>
+            <td>${g.type}</td><td>${g.count}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+    $('#prefs').style.display = 'grid';
+    $('#btn-save').disabled = false;
+  } catch (e) {
+    $('#bangumi-info').innerHTML = '<div style="color:var(--err)">解析失败: ' + e + '</div>';
+  }
+}
+
+async function saveSeries() {
+  if (!selected) return;
+  const body = {
+    mikan_id: selected.id,
+    name: selected.name,
+    cover_url: selected.cover,
+    subtitle_groups: $('#pref-groups').value.split(/[,，]/).map(x => x.trim()).filter(Boolean),
+    language: $('#pref-lang').value,
+    embedded_only: $('#pref-embed').value === 'true',
+    save_path: $('#pref-path').value || '/' + selected.name,
+  };
+  const r = await api('/api/series', 'POST', body);
+  if (r.ok) {
+    toast('已添加: ' + selected.name, 'ok');
+    closeModal();
+    loadSeries();
+  } else {
+    toast('失败: ' + (r.error || '未知错误'), 'error');
+  }
+}
+
+// 登录态横幅
+async function checkLogin() {
+  const d = await api('/api/cookies');
+  if (!d.logged_in) {
+    const b = $('#banner');
+    b.textContent = '⚠ 登录态未建立，请点右上角"扫码登录"';
+    b.classList.add('show');
+  } else {
+    $('#banner').classList.remove('show');
+  }
+}
+
+// 事件绑定
+$('#btn-add').onclick = openModal;
+$('#btn-cancel').onclick = closeModal;
+$('#btn-search').onclick = doSearch;
+$('#btn-save').onclick = saveSeries;
+$('#btn-refresh').onclick = refresh;
+$('#btn-qr').onclick = scanQr;
+$('#search-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doSearch();
+});
+$('#modal-add').addEventListener('click', e => {
+  if (e.target.id === 'modal-add') closeModal();
+});
+
+// 初始化
+loadSeries();
+checkLogin();
+</script>
+</body>
+</html>

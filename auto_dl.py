@@ -15,14 +15,17 @@ import http.cookiejar
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from filelock import FileLock
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 LIST_FILE = os.path.join(BASE, "追番列表.json")
+LIST_LOCK = os.path.join(BASE, ".list.lock")
 COOKIE_FILE = os.path.join(BASE, ".baidu_cookies.json")
 QR_FILE = os.path.join(BASE, "login_qr.png")
 RUN_LOG = os.path.join(BASE, ".auto_dl_state.json")
@@ -284,8 +287,9 @@ def main():
         except Exception as e:
             print(f"  任务状态读取失败: {e}")
 
-    # 4) 持久化更新后的清单
-    json.dump(cfg, open(LIST_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    # 4) 持久化更新后的清单（加锁，避免与 web 并发写冲突）
+    with FileLock(LIST_LOCK, timeout=15):
+        json.dump(cfg, open(LIST_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
     # 5) 清理临时件
     for p in (QR_FILE,):
