@@ -182,14 +182,16 @@ python auto_dl.py
 - [x] 配置文件设计
 - [x] GitHub 仓库初始化
 - [x] README + LICENSE
+- [x] Web 控制台基础框架（CRUD + 蜜柑搜索 + 详情页解析 + 网盘扫描 + 手动触发）
+- [x] 文件锁封装（msvcrt，web 与 auto_dl 共享）
 
 ### 进行中
 
-- [ ] Web 控制台（CRUD + 搜索 + 手动触发）
+- [ ] Web 控制台优化（话数正则、网盘目录扫描稳定性、UI 细节）
 
 ### 待办
 
-- [ ] 文件锁封装（msvcrt）
+- [x] 文件锁封装（msvcrt）
 - [ ] 入口 .bat：双击启动 web + 浏览器
 - [ ] 登录态定时体检
 - [ ] 失败重试策略
