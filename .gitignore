@@ -6,6 +6,9 @@ baidu_keys.json
 .auto_dl_state.json
 login_qr.png
 run_log_*.json
+.qr_state.json
+.qr_login.log
+static/qr.png
 
 # 浏览器配置副本
 .chrome_copy/

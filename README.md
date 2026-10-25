@@ -113,8 +113,10 @@ python auto_dl.py
 ├── auto_dl.py                  # 主入口：定时触发
 ├── qr_cloud_dl.py              # 扫码登录，获取/续命 BDUSS
 ├── parse_mikan.py              # 蜜柑详情页解析器
-├── web_app.py                  # Web 后端（待实现）⚠
-├── static/index.html          # Web 前端（待实现）⚠
+├── filelock.py                 # Windows msvcrt 文件锁（web 与 auto_dl 共享）
+├── web_app.py                  # Web 后端（stdlib http.server，端口 8765）
+├── static/index.html           # Web 前端单页（暗色主题 + 扫码模态）
+├── HANDOFF.md                  # 内部交接文档（转 public 前删除）
 ├── LICENSE
 └── README.md
 ```
@@ -155,10 +157,11 @@ python auto_dl.py
 ## 已知限制
 
 1. **登录态会过期**：BDUSS 通常几天到几周失效，过期后必须人工扫码。这是百度的设计，无法绕开。
-2. **版权哈希过滤**：热门番剧的磁力可能被百度秒失败或文件改名 `.bak`，无法控制，只能事后如实汇报。
-3. **蜜柑依赖页面结构**：HTML 选择器变化会让解析器失效，需要不定期维护。
-4. **单进程**：`http.server` 单线程，用线程池处理并发请求。
-5. **`baidupcsapi` 不可达**：本仓库之所以从零搭，就是因为 PyPI 上的 `baidupcsapi` 历史项目不可达，且我们走的是 web API 不是 PCS API。
+2. **bdstoken 风控**：`gettemplatevariable` 请求 `fields=["bdstoken"]` 单字段会被风控拦截（errno=-6），必须带多字段（如 `["bdstoken","username","dp"]`）。代码已内置此规避。
+3. **版权哈希过滤**：热门番剧的磁力可能被百度秒失败或文件改名 `.bak`，无法控制，只能事后如实汇报。
+4. **蜜柑依赖页面结构**：HTML 选择器变化会让解析器失效，需要不定期维护。
+5. **单进程**：`http.server` 单线程，用线程池处理并发请求。
+6. **`baidupcsapi` 不可达**：本仓库之所以从零搭，就是因为 PyPI 上的 `baidupcsapi` 历史项目不可达，且我们走的是 web API 不是 PCS API。
 
 ## 失败处理
 
@@ -184,17 +187,22 @@ python auto_dl.py
 - [x] README + LICENSE
 - [x] Web 控制台基础框架（CRUD + 蜜柑搜索 + 详情页解析 + 网盘扫描 + 手动触发）
 - [x] 文件锁封装（msvcrt，web 与 auto_dl 共享）
+- [x] 前端扫码模态（二维码直接渲染在页面内，轮询状态机驱动）
+- [x] 登录链路打通（扫码 + 缓存登录态复用双路径，bdstoken 风控规避）
 
 ### 进行中
 
+- [ ] 首次真实提交验证（久留美 01v2/02/03 三话，磁力已就绪、登录态已缓存）
 - [ ] Web 控制台优化（话数正则、网盘目录扫描稳定性、UI 细节）
+- [ ] 去除 `web_app.py` 中首次提交用的硬编码磁力（改为配置驱动）
 
 ### 待办
 
-- [x] 文件锁封装（msvcrt）
-- [ ] 入口 .bat：双击启动 web + 浏览器
 - [ ] 登录态定时体检
 - [ ] 失败重试策略
+- [ ] 入口 .bat：双击启动 web + 浏览器
+
+> 内部进度断点与环境细节见 `HANDOFF.md`（仓库转 public 前删除）。
 
 ## 借鉴的项目
 

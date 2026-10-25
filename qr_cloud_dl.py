@@ -76,7 +76,8 @@ def qr_login(opener, jar):
     print("QR_READY", flush=True)
 
     # 轮询登录结果
-    deadline = time.time() + 240
+    deadline = time.time() + 360
+    poll_count = 0
     while time.time() < deadline:
         try:
             u = (f"https://passport.baidu.com/channel/unicast?channel_id={sign}"
@@ -101,10 +102,12 @@ def qr_login(opener, jar):
                     cookies["BDUSS"] = v
                     json.dump(cookies, open(COOKIE_FILE, "w"))
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            poll_count += 1
+            if poll_count % 5 == 0:
+                print(f"    等待扫码确认中... ({poll_count} 次轮询)", flush=True)
         time.sleep(3)
-    print("    扫码超时")
+    print("    扫码超时（6分钟内未收到确认信号）")
     return False
 
 

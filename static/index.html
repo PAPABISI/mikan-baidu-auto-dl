@@ -220,6 +220,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 13px;
 }
 .modal .actions { display: flex; gap: 8px; justify-content: flex-end; }
+.ok-text { color: var(--accent-2); font-size: 13px; margin: 4px 0; }
+.err-text { color: var(--err); font-size: 13px; margin: 4px 0; }
+.pending { color: var(--text-dim); font-size: 13px; margin: 4px 0; }
 
 .loading { text-align: center; padding: 20px; color: var(--text-dim); }
 .loading::after {
@@ -345,6 +348,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 <div id="toast" class="toast"></div>
 
+<!-- 扫码登录模态 -->
+<div id="modal-qr" class="modal-bg">
+  <div class="modal" style="width: 460px;">
+    <h2>扫码登录百度网盘 + 提交磁力</h2>
+    <div id="qr-state" style="text-align:center; padding: 16px 0; color: var(--text-dim);">准备中...</div>
+    <div id="qr-img-wrap" style="text-align:center; margin-bottom: 12px;">
+      <img id="qr-img" alt="二维码" style="display:none; width: 240px; height: 240px; image-rendering: pixelated; background: #fff; padding: 12px; border-radius: 8px;">
+    </div>
+    <div id="qr-msg" style="text-align:center; color: var(--warn); font-size: 13px; margin-bottom: 12px; min-height: 20px;"></div>
+    <div id="qr-tasks" style="margin-bottom: 12px;"></div>
+    <div class="actions">
+      <button id="qr-cancel">关闭</button>
+      <button id="qr-restart" class="primary">重新生成</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => document.querySelectorAll(s);
@@ -469,11 +489,80 @@ async function refresh() {
   }
 }
 
-// 扫码登录
+// 扫码登录（含磁力提交流程）
+let qrPollTimer = null;
+
 async function scanQr() {
-  const d = await api('/api/scan-qr', 'POST');
-  toast(d.ok ? '已生成二维码，请查看 login_qr.png 扫码' : '失败: ' + d.error,
-        d.ok ? 'ok' : 'error');
+  // 先看是否已经在跑
+  let cur = null;
+  try { cur = await api('/api/qr/status'); } catch (e) {}
+  if (cur && ['WAITING', 'LOGGED_IN', 'SUBMITTING'].includes(cur.state)) {
+    openQrModal();
+    return;
+  }
+  const d = await api('/api/scan-qr', 'POST', {});
+  if (!d.ok) {
+    toast(d.error || '启动失败', 'error');
+    openQrModal();
+    return;
+  }
+  toast(d.msg || '流程已启动', 'ok');
+  openQrModal();
+}
+
+function openQrModal() {
+  $('#modal-qr').classList.add('show');
+  pollQr();
+}
+
+function closeQrModal() {
+  $('#modal-qr').classList.remove('show');
+  if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+}
+
+async function pollQr() {
+  if (qrPollTimer) clearInterval(qrPollTimer);
+  const tick = async () => {
+    try {
+      const d = await api('/api/qr/status');
+      $('#qr-state').textContent = stateLabel(d.state);
+      $('#qr-msg').textContent = d.message || '';
+      if (d.qr_url) {
+        $('#qr-img').src = d.qr_url;
+        $('#qr-img').style.display = 'inline-block';
+      } else {
+        $('#qr-img').style.display = 'none';
+      }
+      // 任务列表
+      const tl = (d.tasks || []).map(t => {
+        const ec = t.errno;
+        const ok = ec === 0;
+        const cls = ok ? 'ok-text' : (ec === null ? 'pending' : 'err-text');
+        const extra = t.task_name ? ` · ${t.task_name}` : '';
+        const st = t.status != null ? ` · status=${t.status}` : '';
+        return `<div class="${cls}">• ${t.name}: errno=${ec}${st}${extra}</div>`;
+      }).join('');
+      $('#qr-tasks').innerHTML = tl || '';
+      if (d.state === 'DONE' || d.state === 'FAILED') {
+        clearInterval(qrPollTimer); qrPollTimer = null;
+      }
+    } catch (e) { /* 忽略瞬时错误 */ }
+  };
+  tick();
+  qrPollTimer = setInterval(tick, 2000);
+}
+
+function stateLabel(s) {
+  return ({
+    IDLE: '空闲', WAITING: '等待扫码',
+    LOGGED_IN: '已登录，准备提交', SUBMITTING: '提交磁力中...',
+    DONE: '完成', FAILED: '失败'
+  })[s] || s;
+}
+
+async function restartQr() {
+  await api('/api/scan-qr', 'POST', {});
+  pollQr();
 }
 
 // 加番模态
@@ -588,11 +677,16 @@ $('#btn-search').onclick = doSearch;
 $('#btn-save').onclick = saveSeries;
 $('#btn-refresh').onclick = refresh;
 $('#btn-qr').onclick = scanQr;
+$('#qr-cancel').onclick = closeQrModal;
+$('#qr-restart').onclick = restartQr;
 $('#search-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') doSearch();
 });
 $('#modal-add').addEventListener('click', e => {
   if (e.target.id === 'modal-add') closeModal();
+});
+$('#modal-qr').addEventListener('click', e => {
+  if (e.target.id === 'modal-qr') closeQrModal();
 });
 
 // 初始化
