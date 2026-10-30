@@ -3,6 +3,12 @@
 本项目当前采用 **Python 准备资源 + AI 操作百度官网 + 本地 Web 记录历史**。
 旧的 `qr_cloud_dl.py` / 百度 `cloud_dl` API 方案不作为生产入口。不要再读取浏览器 Cookie 数据库、导出账号凭据或用隐藏网页状态/脚本绕过官方 UI。
 
+## 开发文档与任务范围
+
+- 接手开发先读 [DEVELOPMENT.md](DEVELOPMENT.md)，按其中的实现、验证、文档、Git 提交流程操作；用 README 核对当前接口，用 HANDOFF 顶部了解最近断点。
+- [docs/ROADMAP.md](docs/ROADMAP.md) 记录本地个人版的方向建议。SQLite、完整资源采集、独立观看记录和前后端分开部署仍是规划，只有用户另行提出具体任务时才实施，不能把路线图当作自动执行清单。
+- 当前目标是本地个人使用，保留现有 Python 与本地启动方式。开发后维护相关契约和交接，使不同 AI 能按同一规范继续工作。
+
 ## 交付与 Git 提交
 
 - 用户要求：每次新增需求完成实现并通过必要验证后，自动执行 `git commit`，无需再次询问是否提交。
@@ -72,4 +78,4 @@ report 从 stdin 或 UTF-8 JSON 文件读取：
 - Web 的“季度新番”仅浏览 Bangumi 公开资料与评分，可按年份/季度/关键词分页读取 `/api/bangumi/season`。评分人数与缓存时间一起展示；此入口不会新增追番或操作网盘，仍需由用户确认蜜柑条目及字幕偏好后保存。
 - HTTP：GET `/api/library`、GET `/api/agent/queue`、POST `/api/agent/claim`、POST `/api/agent/report`、POST `/api/agent/review`，写请求用 JSON。
 - 所有常见 Agent 只要支持 Python/本地 HTTP 与浏览器 UI 都可遵循本协议。不能访问同一工作区或浏览器的云端 Agent 不能直接执行本地任务，不应声称兼容即等于自动共享会话。
-- 代码改动后运行 `python -m unittest discover -s tests -v` 与 `node --check static/app.js`。测试必须使用临时库和模拟远端，不得往真实网盘提交测试任务。
+- 代码改动后运行 `python -m unittest discover -s tests -v`，并按改动检查 `node --check static/app.js` 和 `node --check static/season.js`。测试必须使用临时库和模拟远端，不得往真实网盘提交测试任务；纯文档变更按 DEVELOPMENT.md 做文档验证。
