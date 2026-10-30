@@ -3,6 +3,7 @@ const $$ = selector => Array.from(document.querySelectorAll(selector));
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const labels = {READY:'待添加',CLAIMED:'已领取',SUBMITTING:'正在提交',SUBMITTED:'网盘已受理',DOWNLOADING:'下载中',COMPLETED:'已入盘',FAILED:'失败',UNKNOWN:'待核验',SUPERSEDED:'已替换',METADATA:'资料更新',WATCH:'开始追番',FOLDER:'目录已核验',BLOCKED:'执行受阻',SCHEDULE:'定时巡检'};
 const days = ['','周一','周二','周三','周四','周五','周六','周日'];
+labels.COLLECTION = '发现合集';
 let library = {series:[],jobs:[],events:[],stats:{},scheduler:{}};
 let selectedId = null, draft = null, editingIndex = null, chosenBangumi = null, searchSequence = 0;
 let pollTimer = null, toastTimer = null, fetching = false;
@@ -109,7 +110,7 @@ function renderCards() {
       '<div class="progress-label"><span>已核验入盘</span><b>' + done + ' <span>/ ' + (s.total_episodes || '—') + ' 话</span></b></div>' +
       '<div class="progress-track"><span style="width:' + percent + '%"></span></div>' +
       '<div class="card-bottom"><span>' + (failed ? '<span class="fail">' + failed + ' 话需处理</span>' : ready ? '<span class="ready">' + ready + ' 话待添加</span>' : pending ? pending + ' 话网盘处理中' : '<span class="done">暂无待添加</span>') +
-      '</span><span>查看详情 ↗</span></div></div></article>';
+      '</span><span>' + (s.collections?.length ? s.collections.length + ' 个合集可选 · ' : '') + '查看详情 ↗</span></div></div></article>';
   }).join('') || (library.series.length ? '<p class="muted">没有匹配的番剧。</p>' : '');
 }
 function renderCalendar() {
@@ -135,6 +136,22 @@ function renderHistory() {
 }
 function canObserve(job) {
   return !['COMPLETED','CLAIMED','SUBMITTING','SUPERSEDED'].includes(job.state);
+}
+function collectionCards(items) {
+  if (!items.length) return '';
+  return '<p class="muted">合集范围来自资源标题，需核对实际文件与已有记录；合集不自动入队，也不计作单话进度。</p>' + items.map(item =>
+    '<article class="collection-card"><div class="collection-heading"><strong>' + esc(item.episode_label) + '</strong><button type="button" class="text-button" data-copy-collection="' +
+    esc(item.infohash) + '">复制合集磁力</button></div><p>' + esc(item.title) + '</p><div class="chips"><span class="chip">' + esc(item.group) + '</span><span class="chip">' +
+    esc(item.lang) + esc(item.subtitle_type) + ' · ' + esc(item.resolution) + '</span><span class="chip">' + esc(item.size || '大小未知') + '</span></div>' +
+    (item.matches_preferences === false ? '<p class="collection-note">与当前字幕偏好不符，仅供手动选择。</p>' : '') +
+    (item.overlap_episodes?.length ? '<p class="collection-note">包含已有执行中、已入盘或待核验记录的话数：' + esc(item.overlap_episodes.join('、')) + '，请核对重复。</p>' : '') +
+    '<details><summary class="muted">磁力文本</summary><code class="collection-magnet">' + esc(item.magnet) + '</code></details></article>').join('');
+}
+async function copyCollection(button, items) {
+  const item = items.find(candidate => candidate.infohash === button.dataset.copyCollection);
+  if (!item) return;
+  const copied = await copy(item.magnet);
+  button.textContent = copied ? '已复制' : '请展开磁力文本手动复制';
 }
 function updateJobSelection() {
   const choices = $$('#detail-content input[data-job-select]:not(:disabled)');
@@ -189,8 +206,9 @@ function renderDetail() {
       (j.observation_source === 'user' ? ' · 用户确认' : '') + '</div></td><td><button class="text-button" data-action="copy-magnet" data-job="' + j.id + '">复制磁力</button>' +
       (canObserve(j) ? '<div><button class="text-button" data-action="observe" data-job="' + j.id + '">记录手动结果</button></div>' : '') +
       (j.state === 'FAILED' ? '<div><button class="text-button" data-action="retry" data-job="' + j.id + '">重试失败任务</button></div>' : '') +
-      '</td></tr>').join('') + '</tbody></table>' + (!jobs.length ? '<p class="muted">尚无资源记录，点击检查新集开始准备。</p>' : '') + '</div>' +
+      '</td></tr>').join('') + '</tbody></table>' + (!jobs.length ? '<p class="muted">尚无普通单话任务；已发现的合集会在下方单独展示。</p>' : '') + '</div>' +
     '<div class="detail-actions"><span class="muted">网盘已受理 ≠ 文件已入盘；未知结果需先核验。</span><button class="button quiet" data-action="edit">编辑追番偏好</button></div>';
+  if (s.collections?.length) $('#detail-content').insertAdjacentHTML('beforeend','<section class="collection-panel"><h3>合集资源 · ' + s.collections.length + ' 个候选</h3>' + collectionCards(s.collections) + '</section>');
   updateJobSelection();
 }
 async function poll() {
@@ -254,7 +272,8 @@ function renderGroupOptions() {
   const names = [...new Set([...preferredGroups,...availableVariants.map(v => v.group)])];
   $('#groups').innerHTML = '<option value="">不限字幕组</option>' + names.map(name => {
     const episodes = new Set(availableVariants.filter(v => v.group === name).flatMap(v => v.episodes));
-    return '<option value="' + esc(name) + '">' + esc(name) + ' · ' + episodes.size + ' 话</option>';
+    const collections = availableVariants.filter(v => v.group === name).reduce((count,v) => count + (v.collection_count || 0),0);
+    return '<option value="' + esc(name) + '">' + esc(name) + ' · ' + episodes.size + ' 话' + (collections ? ' + ' + collections + ' 个合集' : '') + '</option>';
   }).join('');
   $('#groups').value = preferredGroups[0] || '';
   $('#group-priority-note').textContent = preferredGroups.length > 1 ? '现有优先级：' + preferredGroups.join(' → ') + '。改选字幕组会重新设置此优先级。' : '';
@@ -267,13 +286,18 @@ function renderVariants() {
     const active = v.language === $('#language').value && v.type === $('#embedded').value && v.resolution === $('#resolution').value;
     return '<button type="button" class="variant-option ' + (active ? 'selected' : '') + '" data-variant="' + v.index + '" ' + (known ? '' : 'disabled') +
       ' title="' + esc(v.sample || '') + '"><strong>' + (!group ? esc(v.group) + ' · ' : '') + esc(v.language) + ' · ' + esc(v.type) + ' · ' + esc(v.resolution) +
-      '</strong><small>' + v.count + ' 话 · ' + esc(v.episodes.join('、')) + (!known ? ' · 字幕标记不明确' : '') + '</small></button>';
+      '</strong><small>' + v.count + ' 话' + (v.episodes.length ? ' · ' + esc(v.episodes.join('、')) : '') +
+      (v.collection_count ? ' · ' + v.collection_count + ' 个合集' : '') + (!known ? ' · 字幕标记不明确' : '') + '</small></button>';
   }).join('');
   const matched = variants.filter(v => ($('#language').value === '不限' || v.language === $('#language').value) &&
     ($('#embedded').value === '不限' || v.type === $('#embedded').value) && ($('#resolution').value === '不限' || v.resolution === $('#resolution').value));
   const count = new Set(matched.flatMap(v => v.episodes)).size;
-  $('#variant-preview').textContent = '当前选择在' + (group ? '所选字幕组' : '全部字幕组') + '中匹配 ' + count + ' 话。' +
-    (!count ? '可保存偏好等待后续发布。' : '') + (group && !$('#strict-group').checked ? '未限定字幕组时，检查新集也可使用其他组。' : '');
+  const collections = matched.reduce((sum,v) => sum + (v.collection_count || 0),0);
+  $('#variant-preview').textContent = '当前选择在' + (group ? '所选字幕组' : '全部字幕组') + '中匹配 ' + count + ' 话、' + collections + ' 个合集。' +
+    (!count ? collections ? '合集可复制磁力，暂不生成逐话待添加任务。' : '可保存偏好等待后续发布。' : '') + (group && !$('#strict-group').checked ? '未限定字幕组时，检查新集也可使用其他组。' : '');
+  const batches = variants.flatMap(v => (v.collections || []).map(item => ({...item, matches_preferences:matched.includes(v)})));
+  $('#collection-options').hidden = !batches.length;
+  $('#collection-options').innerHTML = batches.length ? '<h3>可用合集</h3>' + collectionCards(batches) : '';
 }
 async function loadVariants(autoSelect=false) {
   if (!draft) return;
@@ -293,7 +317,7 @@ async function loadVariants(autoSelect=false) {
       }
     }
     renderGroupOptions(); renderVariants();
-    $('#variant-status').textContent = availableVariants.length ? '选择下方版本可同时设置语言、字幕形式和清晰度。' : '尚无可识别的普通单话资源，可保留偏好等待更新。';
+    $('#variant-status').textContent = availableVariants.length ? '选择下方版本可设置字幕偏好；合集另列并可复制磁力。' : '尚无可识别的单话或合集资源，可保留偏好等待更新。';
   } catch (error) {
     if (sequence === searchSequence) $('#variant-status').textContent = '读取失败：' + error.message + '。当前偏好已保留，可以重试。';
   } finally {
@@ -362,10 +386,15 @@ async function saveWatch(event) {
   finally { $('#save').disabled = false; }
 }
 async function copy(text) {
-  try { await navigator.clipboard.writeText(text); toast('已复制'); }
-  catch { toast('浏览器未允许复制，请从详情中选中文本复制。'); }
+  try { await navigator.clipboard.writeText(text); toast('已复制'); return true; }
+  catch { toast('浏览器未允许复制，请从详情中选中文本复制。'); return false; }
 }
 $('#detail-content').addEventListener('click',async event => {
+  const collectionButton = event.target.closest('[data-copy-collection]');
+  if (collectionButton) {
+    const series = library.series.find(item => item.mikan_id === selectedId);
+    await copyCollection(collectionButton,series?.collections || []); return;
+  }
   const button = event.target.closest('button[data-action]');
   if (!button) return;
   const s = library.series.find(item => item.mikan_id === selectedId);
@@ -419,6 +448,10 @@ $('#clear-bangumi').onclick = () => { suggestedBangumi = null; chosenBangumi = n
 $('#groups').onchange = () => { preferredGroups = $('#groups').value ? [$('#groups').value] : []; $('#strict-group').checked = !!preferredGroups.length; renderGroupOptions(); renderVariants(); };
 for (const id of ['language','embedded','resolution','strict-group']) $('#' + id).onchange = renderVariants;
 $('#reload-variants').onclick = () => loadVariants(false);
+$('#collection-options').onclick = event => {
+  const button = event.target.closest('[data-copy-collection]');
+  if (button) copyCollection(button,availableVariants.flatMap(v => v.collections || []));
+};
 $('#variant-options').onclick = event => {
   const button = event.target.closest('[data-variant]');
   if (!button || button.disabled) return;

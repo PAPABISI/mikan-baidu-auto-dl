@@ -27,9 +27,28 @@ def subtitle_kind(item):
     return "内嵌" if item.get("embedded") and not item.get("soft") else "内封" if item.get("sealed") else "外挂" if item.get("soft") else "其他"
 
 
+def collection_info(title):
+    """标题中的合集及范围，仅描述发布者标记，不代表已核验种子内容。"""
+    patterns = (
+        r"[\[【［(（]\s*(\d{1,3})\s*[-~～〜–—至到]\s*(\d{1,3})(?!\d)[^\]】］)）]*[\]】］)）]",
+        r"第\s*(\d{1,3})\s*[-~～〜–—至到]\s*(\d{1,3})\s*[话話集]",
+        r"\bS\d{1,2}E(\d{1,3})\s*[-~～]\s*(?:E)?(\d{1,3})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, title, re.I)
+        if match:
+            start, end = map(int, match.groups())
+            if 0 <= start < end <= 999:
+                return {"is_collection": True, "episode_start": start, "episode_end": end,
+                        "episode_label": f"{start:02d}–{end:02d} 合集"}
+    if re.search(r"合集|合輯|全集|全\s*\d+\s*[话話集]|\b(?:batch|complete(?:\s+(?:series|season))?|collection)\b", title, re.I):
+        return {"is_collection": True, "episode_start": None, "episode_end": None, "episode_label": "合集（范围待核实）"}
+    return {"is_collection": False}
+
+
 def episode_info(title):
     """只返回普通单话；合集、SP/OVA/总集篇留给人工处理。"""
-    if re.search(r"[\[【［]\s*(?:SP|OVA|OAD|OP|ED|NCOP|NCED)\s*\d*|特别篇|特別篇|总集篇|總集篇|合集|[\[［]\s*\d+\s*[-~～]\s*\d+", title, re.I):
+    if collection_info(title)["is_collection"] or re.search(r"[\[【［]\s*(?:SP|OVA|OAD|OP|ED|NCOP|NCED)\s*\d*|特别篇|特別篇|总集篇|總集篇|[\[［]\s*\d+\s*[-~～]\s*\d+", title, re.I):
         return "?", 0
     patterns = (
         r"[\[［]\s*(\d{1,3}(?:\.\d+)?)\s*(?:[vV](\d+))?\s*(?:END|完)?\s*[\]］]",
@@ -125,6 +144,7 @@ def parse_mikan(html_txt):
             "resolution": resolution_of(title),
             "chs": chs, "cht": cht, "ep": ep, "ver": ver,
             "lang": "简繁" if chs and cht else "简体" if chs else "繁体" if cht else "未知",
+            **collection_info(title),
         })
     return items
 
@@ -133,7 +153,7 @@ def select_best(items, preferred_groups=()):
     """字幕组按配置顺序优先，同组选择最高修订版本。"""
     by_ep = {}
     for item in items:
-        if item["ep"] == "?":
+        if item.get("is_collection") or item["ep"] == "?":
             continue
         ep = Decimal(item["ep"])
         group = item["group"]
@@ -144,17 +164,20 @@ def select_best(items, preferred_groups=()):
     return [by_ep[ep][1] for ep in sorted(by_ep)]
 
 
-def select_for_series(items, series):
+def matches_preferences(item, series):
     lang = series.get("language", "简体")
     kind = series.get("subtitle_type", "内嵌" if series.get("embedded_only", True) else "不限")
     resolution = series.get("resolution", "不限")
     groups = series.get("subtitle_groups", [])
-    filtered = [it for it in items
-                if (lang == "不限" or it["lang"] == lang)
-                and (kind == "不限" or subtitle_kind(it) == kind)
-                and (resolution == "不限" or it.get("resolution", resolution_of(it["title"])) == resolution)
-                and (not series.get("strict_groups") or not groups or it["group"] in groups)]
-    return select_best(filtered, groups)
+    return ((lang == "不限" or item["lang"] == lang)
+            and (kind == "不限" or subtitle_kind(item) == kind)
+            and (resolution == "不限" or item.get("resolution", resolution_of(item["title"])) == resolution)
+            and (not series.get("strict_groups") or not groups or item["group"] in groups))
+
+
+def select_for_series(items, series):
+    return select_best([item for item in items if not item.get("is_collection") and matches_preferences(item, series)],
+                       series.get("subtitle_groups", []))
 
 
 if __name__ == "__main__":

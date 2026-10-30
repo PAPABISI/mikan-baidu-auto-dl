@@ -19,7 +19,7 @@ def prepare(mikan_id=None):
         lock.__enter__()
     except TimeoutError:
         return {"status": "BUSY", "msg": "已有蜜柑检查在运行"}
-    errors, added = [], []
+    errors, added, collections = [], [], []
     try:
         auto_dl.emit("RUNNING", "正在准备浏览器添加队列，不会自动点击网盘提交")
         series = storage.load_list()["series"]
@@ -34,6 +34,7 @@ def prepare(mikan_id=None):
                 if not resources:
                     raise ValueError("未解析到资源，请检查蜜柑页面或代理")
                 selected = select_for_series(resources, item)
+                collections.extend(catalog.discover_collections(item, resources))
                 new = catalog.enqueue(item, selected)
                 added.extend(new)
                 values = {"last_scan": catalog.now(), "last_scan_error": None,
@@ -57,8 +58,11 @@ def prepare(mikan_id=None):
                 catalog.save_metadata(item["mikan_id"], {"last_scan": catalog.now(), "last_scan_error": message})
                 errors.append({"series": item["name"], "msg": message})
         ready = sum(job["state"] == "READY" for job in catalog.load()["jobs"].values())
-        status = "GENERIC" if errors else "READY" if ready else "NO_UPDATES"
-        return auto_dl.emit(status, f"新增 {len(added)} 话，待 Agent 添加 {ready} 话", added=[j["id"] for j in added], errors=errors)
+        status = "GENERIC" if errors else "READY" if ready or collections else "NO_UPDATES"
+        message = f"新增 {len(added)} 话，待 Agent 添加 {ready} 话"
+        if collections:
+            message += f"；发现 {len(collections)} 个新合集（待人工选择）"
+        return auto_dl.emit(status, message, added=[j["id"] for j in added], collections=[c["id"] for c in collections], errors=errors)
     except Exception as error:
         return auto_dl.emit("GENERIC", safe_error(error))
     finally:

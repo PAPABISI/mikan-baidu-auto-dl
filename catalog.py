@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import storage
 from filelock import FileLock
-from parse_mikan import resolution_of, subtitle_kind, select_for_series
+from parse_mikan import resolution_of, subtitle_kind, select_for_series, matches_preferences
 
 DATA_FILE = os.path.join(storage.BASE, "data", "library.json")
 DATA_LOCK = os.path.join(storage.BASE, "data", ".library.lock")
@@ -129,7 +129,7 @@ def enqueue(series, items):
                 job.update(state="SUPERSEDED", updated_at=now())
                 event(data, "SUPERSEDED", "追番偏好已变更，旧待添加资源不再匹配；未提交网盘", series["mikan_id"], job["id"])
         for item in items:
-            if item.get("ep") == "?":
+            if item.get("is_collection") or item.get("ep") == "?":
                 continue
             same = [j for j in data["jobs"].values() if j["mikan_id"] == series["mikan_id"]
                     and j["save_path"] == series["save_path"] and Decimal(j["episode"]) == Decimal(item["ep"])]
@@ -164,6 +164,34 @@ def enqueue(series, items):
             data["jobs"][jid] = job
             event(data, "READY", f"发现第 {job['episode']} 话 · {job['subtitle_group']}", series["mikan_id"], jid)
             added.append(copy.deepcopy(job))
+        return added
+    return transact(update)
+
+
+def discover_collections(series, items):
+    """保存合集候选；不建立逐话任务，不推进进度，也不进入自动领取队列。"""
+    check_target(series["save_path"])
+    def update(data):
+        records = data.setdefault("collections", {})
+        added = []
+        for item in items:
+            if not item.get("is_collection"):
+                continue
+            identity = f"{series['mikan_id']}|{series['save_path']}|{item['infohash']}"
+            cid = "c-" + hashlib.sha256(identity.encode()).hexdigest()[:24]
+            values = {key: copy.deepcopy(item.get(key)) for key in (
+                "title", "magnet", "infohash", "group", "lang", "embedded", "soft", "sealed", "resolution",
+                "is_collection", "episode_start", "episode_end", "episode_label", "size", "date", "torrent")}
+            values.update(id=cid, mikan_id=series["mikan_id"], series_name=series["name"], save_path=series["save_path"],
+                          subtitle_type=subtitle_kind(item),
+                          source_url=f"https://mikanani.me/Home/Bangumi/{series['mikan_id']}", last_seen=now())
+            if cid not in records:
+                records[cid] = {**values, "first_seen": now()}
+                event(data, "COLLECTION", "发现" + item["episode_label"] + " · " + item["group"] + "；待人工核对，不自动入队",
+                      series["mikan_id"], collection_id=cid)
+                added.append(copy.deepcopy(records[cid]))
+            else:
+                records[cid].update(values)
         return added
     return transact(update)
 
@@ -308,13 +336,24 @@ def retry(job_id, evidence):
 def snapshot(include_all_events=False):
     data = load()
     jobs = [public_job(j) for j in data["jobs"].values()]
+    collections = list(data.get("collections", {}).values())
     series = []
     for config in storage.load_list()["series"]:
         related = [j for j in jobs if j["mikan_id"] == config["mikan_id"] and j["save_path"] == config["save_path"]]
         stats = {state: sum(j["state"] == state for j in related) for state in ALL_STATES}
+        batches = []
+        for candidate in collections:
+            if candidate["mikan_id"] != config["mikan_id"] or candidate["save_path"] != config["save_path"]:
+                continue
+            start, end = candidate.get("episode_start"), candidate.get("episode_end")
+            overlap = sorted({j["episode"] for j in related
+                              if start is not None and end is not None and start <= Decimal(j["episode"]) <= end
+                              and j["state"] in ("CLAIMED", "SUBMITTING", "SUBMITTED", "DOWNLOADING", "UNKNOWN", "COMPLETED")}, key=Decimal)
+            batches.append({**candidate, "matches_preferences": matches_preferences(candidate, config), "overlap_episodes": overlap})
         series.append({**config, **data["metadata"].get(str(config["mikan_id"]), {}),
-                       "stats": stats, "jobs": sorted(related, key=lambda j: Decimal(j["episode"]))})
+                       "stats": stats, "jobs": sorted(related, key=lambda j: Decimal(j["episode"])), "collections": batches})
     return {"version": 1, "mode": "browser-agent", "series": series, "jobs": jobs,
+            "collections": collections,
             "events": list(reversed(data["events"] if include_all_events else data["events"][-200:])),
             "event_count": len(data["events"]), "scheduler": data.get("scheduler", {}),
             "executor": data.get("executor", {}),

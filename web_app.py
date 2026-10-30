@@ -157,15 +157,21 @@ def mikan_bangumi(bid):
     if not items:
         raise ValueError("未解析到资源，请检查蜜柑页面或代理")
     groups = collections.defaultdict(set)
+    batches = collections.defaultdict(list)
     samples = {}
     for item in items:
         kind = subtitle_kind(item)
-        if item["ep"] != "?":
+        if item["ep"] != "?" or item.get("is_collection"):
             key = (item["group"], item["lang"], kind, item["resolution"])
-            groups[key].add(item["ep"])
+            if item.get("is_collection"):
+                groups[key]  # 只有合集的字幕组也需要出现在选择列表中。
+                batches[key].append({**item, "subtitle_type": kind})
+            else:
+                groups[key].add(item["ep"])
             samples.setdefault(key, item["title"])
     return [{"group": group, "language": lang, "type": kind, "resolution": resolution,
-             "count": len(eps), "episodes": sorted(eps, key=float), "sample": samples[(group, lang, kind, resolution)]}
+             "count": len(eps), "episodes": sorted(eps, key=float), "sample": samples[(group, lang, kind, resolution)],
+             "collection_count": len(batches[(group, lang, kind, resolution)]), "collections": batches[(group, lang, kind, resolution)]}
             for (group, lang, kind, resolution), eps in sorted(groups.items())]
 
 

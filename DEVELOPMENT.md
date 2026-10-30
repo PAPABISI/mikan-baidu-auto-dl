@@ -96,6 +96,7 @@ JavaScript 改变后检查相应文件；当前两个入口为：
 node --check static/app.js
 node --check static/season.js
 node --test tests/test_calendar.cjs
+node --test tests/test_collections.cjs
 ```
 
 界面改变时启动或复用本地 Web，使用当前环境允许的浏览器工具验证实际控件、加载/错误状态、保存后的回读和页面显示。测试写入使用临时配置与临时库；真实网盘不能充当测试环境。调用真实公开站点进行只读验证时，控制请求数量，不运行无关批量采集。
@@ -140,6 +141,8 @@ git commit -m "docs: document development workflow and local-first roadmap"
 | 观看记录（待实现） | 用户明确标记的观看话数与时间 | 资源采集范围或下载是否完成 |
 
 旧 `last_episode` 只是历史配置，不能当作已入盘证据。也不能用它过滤掉未来资源库中的所有旧资源；补番、版本切换和观看进度回退都需要保留记录。
+
+合集保存在同一片库的独立 collections 候选中，普通 jobs 仍只承载单话任务。标题范围与实际文件覆盖分开，不按一个磁力虚构多话任务或已完成进度；当前识别与复制入口不等于已经实现合集下载和核验状态机。
 
 ### 5.2 任务状态与证据
 
