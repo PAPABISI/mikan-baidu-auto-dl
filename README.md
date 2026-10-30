@@ -111,6 +111,26 @@ python agent_cli.py verify --input verify.json --dry-run
 
 清单文件由 Agent 的网盘只读工具提供，本程序不访问网盘；清单为空或不合法时报错，不据此改写记录。核验自动化不改变云添加流程：连接器没有离线下载接口，磁力提交仍需在官网手动完成。
 
+### 合集入盘核验
+
+合集没有逐话任务，因此网盘里出现合集文件（或合集解压出的 01–12 单话文件）时，核验会为**真实存在的话数**建立已入盘记录：`origin=collection`、`collection_id` 指向候选合集，证据同时写明真实文件名与合集标题。规则：
+
+- 只处理没有任务、或被合集覆盖的话数；执行中（CLAIMED/SUBMITTING）、已入盘或已替换的记录绝不改写，只列入 `skipped_collection_episodes`
+- 同一话能被多个合集候选覆盖时**必须指定合集**，否则只返回 `collection_choices` 候选、不写入，避免把文件记到别的字幕版本上
+- 合集范围里网盘还没有文件的剩余话数写入 `collection_missing_episodes`，不虚构进度
+- `--dry-run` 只输出计划；`collection_id` 没有覆盖任何文件时整批报错、不保存
+
+```powershell
+# 多个候选时用 --collection 指定合集编号或 infohash
+python agent_cli.py verify --input verify.json --collection b9519f364e5331f99eb9ac4b2430d5bbc8ef17af
+
+# 用户自己在网盘看到文件、由 Agent 记录（也可在 Web 合集卡上点“记录该合集入盘”）
+python agent_cli.py collection-observe --input collection.json
+# collection.json：{"collection_id":"c-xxxx","episodes":["01","02"],"evidence":"网盘可见这两个文件"}
+```
+
+Web 端合集卡新增“记录该合集入盘”：默认按合集范围预填话数，可改成实际已入盘的话数（如 `1-12`、`1,2,5`），保存后逐话写入 `source=user` 的入盘记录。
+
 ## 任务状态与去重
 
 | 状态 | 含义 |
@@ -129,7 +149,7 @@ python agent_cli.py verify --input verify.json --dry-run
 
 筛选优先简体内嵌，“简日内嵌”符合；“简繁”不自动等同于“简体”。字幕组按配置顺序优先，同组同话选择最高修订版。合集独立展示供手动选择，不进入普通单话队列；SP、OVA、特别篇不自动入队。合集范围来自标题，范围未标明时保留待核实，不能由 Bangumi 总话数推定。旧历史游标仅保留，不作为新库确认结果。
 
-例如 [冰之城墙（3898）](https://mikanani.me/Home/Bangumi/3898) 的 LoliHouse 版本为 `01–14 合集 / 简繁内封 / 1080p`，可在新增或编辑追番中选择 LoliHouse 查看、复制磁力；它不符合默认简体内嵌偏好，需由用户明确选择该字幕版本。当前合集仅为资源候选，尚未提供合集提交或整包核验状态，不能通过单话 report/observe 接口虚构合集已入盘。
+例如 [冰之城墙（3898）](https://mikanani.me/Home/Bangumi/3898) 的 LoliHouse 版本为 `01–14 合集 / 简繁内封 / 1080p`，可在新增或编辑追番中选择 LoliHouse 查看、复制磁力；它不符合默认简体内嵌偏好，需由用户明确选择该字幕版本。合集仍是资源候选：发现时不建逐话任务、不推进进度，也不能通过单话 report/observe 虚构合集已入盘；只有网盘实际可见的文件（或用户在 Web 合集卡确认）才写入 `origin=collection` 的入盘记录，见上文“合集入盘核验”。
 
 新配置可使用 `subtitle_type`（内嵌/外挂/内封/不限）、`resolution`（2160p/1440p/1080p/720p/480p/未知/不限）及 `strict_groups`。勾选“仅使用所选字幕组”时不能用其他组补齐；取消后字幕组作为优先级。旧配置仍按 `embedded_only` 解释字幕形式，默认不限清晰度。修改偏好后，下次成功检查会将不再匹配的 READY 资源标为 SUPERSEDED；已受理或已入盘记录不重写、不自动重下。没有匹配资源时可以保存偏好等待更新。
 
@@ -157,7 +177,8 @@ python agent_cli.py verify --input verify.json --dry-run
 | POST /api/agent/review | body: job_id、state、evidence |
 | POST /api/agent/observe | body: job_id、state、source、evidence |
 | POST /api/agent/observe-batch | body: job_ids（非空且不重复）、state、source、evidence；同一番剧和目录，全部成功或全部不保存，返回 jobs |
-| POST /api/agent/verify | body: save_path、files（网盘文件清单）、source（默认 web）、dry_run；按话数匹配任务并记录入盘证据，返回计划与结果 |
+| POST /api/agent/verify | body: save_path、files（网盘文件清单）、source（默认 web）、dry_run、collection（可选合集编号或 infohash）；按话数匹配任务并记录入盘证据，为无任务但被合集覆盖的话数建立入盘记录 |
+| POST /api/collections/observe | body: collection_id、episodes（合集范围内的话数）、source（默认 user）、evidence；逐话写入用户确认的入盘记录，返回 recorded/skipped |
 | POST /api/agent/retry | body: job_id、evidence，仅明确失败可重试 |
 | GET /api/mikan/search?q= | 蜜柑搜索 |
 | GET /api/mikan/bangumi/{id} | 字幕组与资源分布；count/episodes 仍为单话，collection_count/collections 提供合集及磁力；collection_support=true 标记后台支持合集 |
@@ -181,7 +202,7 @@ python agent_cli.py verify --input verify.json --dry-run
 - `追番列表.json`：追番配置。
 - `data/library.json`：唯一新片库，持久保存元数据、每话任务和完整事件。已 Git 忽略，迁移时需自行备份；片库页面和普通接口展示最近 200 条事件，Web 导出包含全部事件。
 - `catalog.py`：任务、领取、状态转换、事件事务。
-- `verify.py`：网盘目录清单与任务的匹配核验；不访问网络，不提交网盘。
+- `verify.py`：网盘目录清单与任务/合集的匹配核验；不访问网络，不提交网盘。
 - `agent_bridge.py` / `agent_cli.py`：准备资源与跨 Agent JSON 协议。
 - `metadata.py` / `parse_mikan.py`：Bangumi 资料与蜜柑解析。
 - `season.py` / `static/season.js`：季度新番浏览；公开资料缓存为 `data/season-cache.json`，不进入 Git，不替代真实入盘记录库。

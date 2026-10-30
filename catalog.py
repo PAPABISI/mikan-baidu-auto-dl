@@ -312,6 +312,103 @@ def observe_batch(job_ids, state, evidence, source):
     return transact(update)
 
 
+def series_for_path(save_path):
+    """按保存目录查找追番配置；目录是入盘记录与合集的唯一定位依据。"""
+    return next((item for item in storage.load_list()["series"] if item["save_path"] == save_path), None)
+
+
+def episode_text(value):
+    """统一话数写法：整数补两位，带小数点的话数保留原值。"""
+    number = Decimal(str(value).strip())
+    if number >= 0 and number == number.to_integral_value():
+        return f"{int(number):02d}"
+    return format(number.normalize(), "f")
+
+
+def _job_for_episode(data, config, episode):
+    for job in data["jobs"].values():
+        if (job["mikan_id"] == config["mikan_id"] and job["save_path"] == config["save_path"]
+                and Decimal(job["episode"]) == Decimal(episode)):
+            return job
+    return None
+
+
+def _record_collection_episode(data, config, collection, episode, evidence, source):
+    """用合集入盘证据记录一话；执行中、已入盘或已替换的记录不改写。
+
+    合集没有逐话任务，因此这里按需建立一条已入盘的记录，保留合集来源，
+    证据必须来自真实文件或用户确认，不凭候选推断进度。
+    """
+    job = _job_for_episode(data, config, episode)
+    if job and job["state"] in ("CLAIMED", "SUBMITTING", "SUPERSEDED", "COMPLETED"):
+        return "skipped", job
+    prefix = "用户确认：" if source == "user" else "网页核验："
+    if job:
+        job.update(state="COMPLETED", evidence=evidence, observation_source=source, updated_at=now(),
+                   completed_at=now(), origin="collection", collection_id=collection["id"],
+                   collection_title=collection["title"])
+        event(data, "COMPLETED", prefix + evidence, job["mikan_id"], job["id"], source=source)
+        return "recorded", job
+    jid = hashlib.sha256(f"{config['mikan_id']}|{config['save_path']}|{collection['infohash']}|{episode}".encode()).hexdigest()[:24]
+    job = {"id": jid, "mikan_id": config["mikan_id"], "series_name": config["name"], "episode": episode,
+           "version": 1, "title": collection["title"], "subtitle_group": collection.get("group", "未知"),
+           "language": collection.get("lang"), "embedded": bool(collection.get("embedded")),
+           "size": None, "subtitle_type": collection.get("subtitle_type"),
+           "resolution": collection.get("resolution"), "release_date": collection.get("date"),
+           "infohash": collection["infohash"], "magnet": collection.get("magnet"),
+           "save_path": config["save_path"], "source_url": collection.get("source_url"),
+           "state": "COMPLETED", "origin": "collection", "collection_id": collection["id"],
+           "collection_title": collection["title"], "evidence": evidence, "observation_source": source,
+           "created_at": now(), "updated_at": now(), "completed_at": now(), "attempts": []}
+    data["jobs"][jid] = job
+    event(data, "COMPLETED", prefix + evidence, job["mikan_id"], jid, source=source)
+    return "created", job
+
+
+def observe_collection(collection_id, episodes, evidence, source="user"):
+    """确认某个合集候选已入盘，为覆盖的话数写入已入盘记录。
+
+    仅接受合集范围内的整数话数；任一话不在范围内则整批不保存。
+    """
+    if not isinstance(collection_id, str) or not collection_id:
+        raise ValueError("请提供合集编号")
+    if not isinstance(episodes, list) or not episodes:
+        raise ValueError("请选择合集已入盘的话数")
+    if source not in ("user", "web"):
+        raise ValueError("观察来源必须是 user 或 web")
+    evidence = clean_evidence(evidence)
+
+    def update(data):
+        collection = data.get("collections", {}).get(collection_id)
+        if collection is None:
+            raise ValueError("合集候选不存在，请先检查新集后重试")
+        config = series_for_path(collection["save_path"])
+        if config is None or config["mikan_id"] != collection["mikan_id"]:
+            raise ValueError("该合集所属番剧已不在追番列表")
+        start, end = collection.get("episode_start"), collection.get("episode_end")
+        if start is None or end is None:
+            raise ValueError("该合集缺少话数范围，不能记录入盘")
+        normalized = []
+        for raw in episodes:
+            try:
+                episode = episode_text(raw)
+                Decimal(episode)
+            except (ArithmeticError, ValueError):
+                raise ValueError(f"话数无效：{raw!r}")
+            if not Decimal(start) <= Decimal(episode) <= Decimal(end):
+                raise ValueError(f"第 {episode} 话不在合集范围 {collection['episode_label']} 内，本批未保存")
+            if episode not in normalized:
+                normalized.append(episode)
+        recorded, skipped = [], []
+        for episode in sorted(normalized, key=Decimal):
+            context = clean_evidence(f"{config['name']} · 第 {episode} 话 · {collection['episode_label']}（{collection['title']}）；{evidence}")
+            status, job = _record_collection_episode(data, config, collection, episode, context, source)
+            (recorded if status != "skipped" else skipped).append(public_job(job))
+        return {"collection_id": collection_id, "episode_label": collection["episode_label"],
+                "source": source, "recorded": recorded, "skipped": skipped}
+    return transact(update)
+
+
 def public_job(job):
     result = {key: copy.deepcopy(value) for key, value in job.items() if key not in ("claim_token", "lease_until")}
     result.setdefault("resolution", resolution_of(job["title"]))

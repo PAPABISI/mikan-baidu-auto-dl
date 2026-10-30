@@ -655,6 +655,26 @@ class HTTPTests(HTTPFixture):
         self.assertEqual(data["jobs"][0]["observation_source"], "web")
         self.assertEqual(self.request("/api/agent/verify", "POST", {"save_path": "/Anime/测试番", "files": []})[0], 400)
 
+    def test_collection_observe_http_records_episodes(self):
+        record = catalog.discover_collections(series(), [{
+            "title": "[绿茶字幕组] 测试番 [01-03 合集][1080P][简体内嵌]", "infohash": "e" * 40,
+            "group": "绿茶字幕组", "lang": "简体", "embedded": True, "soft": False, "sealed": False,
+            "resolution": "1080p", "is_collection": True, "episode_start": 1, "episode_end": 3,
+            "episode_label": "01–03 合集", "size": "1.2GB", "date": "2026/10/29 10:00",
+            "magnet": "magnet:?xt=urn:btih:" + "e" * 40,
+            "torrent": "https://mikanani.me/Download/x.torrent"}])[0]
+        status, result = self.request("/api/collections/observe", "POST",
+                                      {"collection_id": record["id"], "episodes": [1, 2],
+                                       "evidence": "用户确认网盘可见 01、02 两个文件"})
+        self.assertEqual(status, 200)
+        self.assertEqual([job["episode"] for job in result["recorded"]], ["01", "02"])
+        data = self.request("/api/library")[1]
+        self.assertEqual(data["stats"]["COMPLETED"], 2)
+        self.assertEqual(data["jobs"][0]["collection_id"], record["id"])
+        self.assertEqual(self.request("/api/collections/observe", "POST",
+                                      {"collection_id": record["id"], "episodes": [9],
+                                       "evidence": "第 9 话不在合集范围内"})[0], 400)
+
     def test_library_http_exposes_blocker_without_claiming_success(self):
         catalog.enqueue(series(), parse_mikan(row()))
         catalog.transact(lambda data: data.update(executor={"status": "BLOCKED"}))

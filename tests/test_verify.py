@@ -27,6 +27,16 @@ def file_entry(ep="01", size=453786047):
     return {"filename": f"[Studio GreenTea] 测试番 [{ep}][WebRip][1080p].mp4", "size": size}
 
 
+def collection(hash_char="c", start=1, end=12, group="合集组"):
+    return {"title": f"[{group}] 测试番 [{start:02d}-{end:02d} 合集][1080p][简体内嵌]",
+            "infohash": hash_char * 40, "group": group, "lang": "简体", "embedded": True,
+            "soft": False, "sealed": False, "resolution": "1080p", "is_collection": True,
+            "episode_start": start, "episode_end": end, "episode_label": f"{start:02d}–{end:02d} 合集",
+            "size": "4.9GB", "date": "2026/10/30 10:00",
+            "magnet": "magnet:?xt=urn:btih:" + hash_char * 40,
+            "torrent": "https://mikanani.me/Download/20261030/x.torrent"}
+
+
 class VerifyTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix=".test-", dir=storage.BASE)
@@ -149,6 +159,89 @@ class VerifyTests(unittest.TestCase):
             code = agent_cli.main(["verify", "--input", path])
         self.assertEqual(code, 0)
         self.assertEqual(catalog.snapshot()["stats"]["COMPLETED"], 1)
+
+    def add_collection(self, hash_char="c", **changes):
+        return catalog.discover_collections(config(), [collection(hash_char, **changes)])[0]
+
+    def jobs_by_episode(self):
+        return {job["episode"]: job for job in catalog.snapshot()["jobs"]}
+
+    def test_collection_files_create_episode_records_with_collection_evidence(self):
+        record = self.add_collection()
+        plan = verify.verify_listing("/Anime/测试番", [file_entry("01"), file_entry("02")])
+        self.assertEqual([item["episode"] for item in plan["created_from_collection"]], ["01", "02"])
+        job = self.jobs_by_episode()["01"]
+        self.assertEqual(job["state"], "COMPLETED")
+        self.assertEqual(job["origin"], "collection")
+        self.assertEqual(job["collection_id"], record["id"])
+        self.assertIn("[01]", job["evidence"])
+        self.assertIn("合集", job["evidence"])
+        self.assertEqual(plan["files_without_job"], [])
+        # 合集范围内没有文件的其余话数如实报告，不虚构进度。
+        self.assertEqual(plan["collection_missing_episodes"][0]["episodes"][:2], ["03", "04"])
+
+    def test_collection_dry_run_creates_nothing(self):
+        self.add_collection()
+        plan = verify.verify_listing("/Anime/测试番", [file_entry("01")], apply=False)
+        self.assertEqual(len(plan["created_from_collection"]), 1)
+        self.assertEqual(catalog.snapshot()["jobs"], [])
+
+    def test_multiple_covering_collections_need_explicit_choice(self):
+        first = self.add_collection("c")
+        self.add_collection("d", group="另一个组")
+        plan = verify.verify_listing("/Anime/测试番", [file_entry("01")])
+        self.assertEqual(plan["created_from_collection"], [])
+        self.assertEqual(len(plan["collection_choices"]), 1)
+        self.assertEqual(len(plan["collection_choices"][0]["candidates"]), 2)
+        self.assertEqual(catalog.snapshot()["jobs"], [])
+        chosen = verify.verify_listing("/Anime/测试番", [file_entry("01")], collection_id=first["infohash"])
+        self.assertEqual(len(chosen["created_from_collection"]), 1)
+        self.assertEqual(self.jobs_by_episode()["01"]["collection_id"], first["id"])
+
+    def test_unknown_collection_id_is_rejected_without_writing(self):
+        self.add_collection(start=1, end=3)
+        with self.assertRaises(ValueError):
+            verify.verify_listing("/Anime/测试番", [file_entry("01")], collection_id="nope")
+        self.assertEqual(catalog.snapshot()["jobs"], [])
+
+    def test_collection_does_not_touch_running_or_completed_jobs(self):
+        job = self.enqueue_all(("01",))[0]
+        catalog.claim("some-agent", job["id"])
+        self.add_collection()
+        plan = verify.verify_listing("/Anime/测试番", [file_entry("01")])
+        self.assertEqual(plan["created_from_collection"], [])
+        self.assertEqual([item["episode"] for item in plan["skipped_collection_episodes"]], ["01"])
+        self.assertEqual(self.job_state(job["id"]), "CLAIMED")
+
+    def test_observe_collection_records_user_confirmation(self):
+        record = self.add_collection(start=1, end=3)
+        result = catalog.observe_collection(record["id"], [1, "02"], "用户确认网盘可见 01、02 两个文件", "user")
+        self.assertEqual([job["episode"] for job in result["recorded"]], ["01", "02"])
+        self.assertTrue(all(job["observation_source"] == "user" for job in result["recorded"]))
+        self.assertIn("用户确认", catalog.snapshot()["events"][0]["message"])
+        again = catalog.observe_collection(record["id"], [1], "再次确认第 1 话仍在网盘", "user")
+        self.assertEqual(again["recorded"], [])
+        self.assertEqual(len(again["skipped"]), 1)
+
+    def test_observe_collection_rejects_episodes_outside_range(self):
+        record = self.add_collection(start=1, end=3)
+        with self.assertRaises(ValueError):
+            catalog.observe_collection(record["id"], [4], "用户确认网盘里能看到第 4 话", "user")
+        with self.assertRaises(ValueError):
+            catalog.observe_collection("c-missing", [1], "用户确认合集已入盘", "user")
+        self.assertEqual(catalog.snapshot()["jobs"], [])
+
+    def test_collection_observe_cli(self):
+        record = self.add_collection(start=1, end=3)
+        path = os.path.join(self.tmp.name, "collection.json")
+        with open(path, "w", encoding="utf-8") as stream:
+            json.dump({"collection_id": record["id"], "episodes": ["01", "02"],
+                       "evidence": "用户确认网盘可见两话"}, stream, ensure_ascii=False)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = agent_cli.main(["collection-observe", "--input", path])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(json.loads(buffer.getvalue())["data"]["recorded"]), 2)
 
 
 if __name__ == "__main__":

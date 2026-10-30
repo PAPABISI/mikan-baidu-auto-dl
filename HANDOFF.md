@@ -2,6 +2,8 @@
 
 本节覆盖后面的早期 API 方案。请先读 README.md 与 AGENTS.md。
 
+合集入盘核验（2026-10-30，分支 B）：用户反馈“添加合集后无法点击核实入盘”。根因是合集只存候选、不建逐话任务，详情页没有任何可勾选任务，`/api/agent/observe*` 也只接受已有 job_id。现改为：网盘清单里存在、但该话没有任务且被某个合集候选覆盖时，按建议真实文件建立 `origin=collection` 的 COMPLETED 记录（`catalog._record_collection_episode`）；多个候选合集都能覆盖同一话时必须用 `--collection`/`collection` 指定，否则只返回 `collection_choices`；合集范围内尚未入盘的话数在 `collection_missing_episodes` 报告；执行中/已入盘/已替换的话数只进 `skipped_collection_episodes`。Web 合集卡新增“记录该合集入盘”（可改话数，如 `1-12`/`1,2,5`），走 POST `/api/collections/observe`（source=user）；CLI 对应 `collection-observe`。真实验收：漂流少年 01-12 合集（喵萌奶茶屋 1080p 简体）已入盘，网盘实测只有 01-04、07-12 共 10 个文件，已核验入盘 10 话，05/06 报告为缺失；140 项 Python 测试通过。
+
 分支 B 新增网盘连接器核验：`verify.py` + `agent_cli.py verify` + POST `/api/agent/verify`。调用方（Agent）用百度网盘连接器的只读目录浏览取 `/Anime/<番名>` 文件清单后提交，程序按话数唯一匹配并原子写入 COMPLETED（source=web，证据含真实文件名与大小）；同一话多文件/多任务、执行中或已完成任务只报告不写入，`--dry-run` 只出计划。连接器无离线下载接口，云添加仍手动。已验证 131 项 Python 测试（含 11 项 verify 单测与 1 项 HTTP 路由测试）通过。本工作副本默认端口 8785；另一副本（D:/GitRepository/MiKan）归其他 AI 维护，勿动其进程与数据。
 
 本工作副本（D:/WorkBuddyProject/MiKan_WorkBuddy/mikan-baidu-auto-dl，分支 B）从 main 同一提交创建，`data/library.json` 为本副本独立空库，与另一副本的真实入盘记录互不影响。

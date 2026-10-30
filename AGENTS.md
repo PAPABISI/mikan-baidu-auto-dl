@@ -37,7 +37,7 @@
 3. `python agent_cli.py prepare` 抓取所追番剧并生成队列，**不会提交网盘**。同时保存标题可识别的合集候选，合集不自动入队。网络失败时记录错误，不能据此报告“无新话”。
 4. `python agent_cli.py queue` 读取待添加及待核验任务。历史游标 `last_episode` 不代表新目录中已有文件；只有新库里的任务记录和实际网盘证据有效。
 
-合集：新增/编辑追番的字幕组选项包含只有合集的组，版本分别展示单话数和合集数。`data/library.json` 的 collections 保存独立候选，library 导出中可读；详情可复制磁力，显示字幕偏好不符和已执行/待核验话数的重叠提示。标题范围不等于已核验文件清单，范围未知不得从总话数推断。合集不能拆成逐话任务、自动领取或推进入盘进度；实际提交与逐话证据的规则仍需遵守，不能将“发现合集”记为下载成功。
+合集：新增/编辑追番的字幕组选项包含只有合集的组，版本分别展示单话数和合集数。`data/library.json` 的 collections 保存独立候选，library 导出中可读；详情可复制磁力，显示字幕偏好不符和已执行/待核验话数的重叠提示。标题范围不等于已核验文件清单，范围未知不得从总话数推断。合集不能自动拆成逐话任务或自动领取，也不能凭候选推进进度；只有网盘实际可见的文件（或用户确认）才写入 `origin=collection` 的入盘记录，证据须含真实文件名与合集标题。不能将“发现合集”记为下载成功。
 
 ## 在官方网页逐话添加
 
@@ -74,7 +74,8 @@ Web 详情支持逐话多选和全选后“核实入盘”，确认前列出具�
 已连接百度网盘连接器（只读目录浏览、文件元信息、建目录等）的 Agent 可以把“核实入盘”自动化，但不能自动云添加：
 
 1. 用连接器的目录浏览读取 `/Anime/<番名>` 的文件清单（文件名、大小；目录条目传 `isdir: true`）。
-2. 调用 `python agent_cli.py verify --input verify.json` 或 POST `/api/agent/verify`，body 为 `{"save_path": "...", "files": [...], "source": "web"}`。Agent 亲自通过授权接口观察到的清单按 source=web 记录；source=user 仅用于用户明确提供并确认的清单。
+2. 调用 `python agent_cli.py verify --input verify.json` 或 POST `/api/agent/verify`，body 为 `{"save_path": "...", "files": [...], "source": "web", "collection": "可选合集编号或 infohash"}`。Agent 亲自通过授权接口观察到的清单按 source=web 记录；source=user 仅用于用户明确提供并确认的清单。
+2b. 合集（含解压后的逐话文件）会为真实存在的话数建立 `origin=collection` 的 COMPLETED 记录；多个候选合集都能覆盖同一话时必须用 `collection` 指定，否则返回 `collection_choices` 且不写入；合集范围里尚未出现在网盘的话数只在 `collection_missing_episodes` 报告。执行中、已入盘、已替换的话数只进 `skipped_collection_episodes`。用户在 Web 合集卡确认时走 POST `/api/collections/observe`（source=user，写入 recorded/skipped），不要为凑进度手填不存在的话数。
 3. 程序按话数唯一匹配文件与任务，只对 READY/SUBMITTED/DOWNLOADING/UNKNOWN/FAILED 状态记录 COMPLETED，证据含真实文件名与大小。同一话多个文件（如 01 与 01v2 共存）或多个候选任务、以及 CLAIMED/SUBMITTING/COMPLETED/SUPERSEDED 任务都不写入，仅在返回的 ambiguous / jobs_without_file / files_without_job 中报告；需要先人工确认再走 observe。
 4. 连接器没有离线下载/磁力提交接口，云添加仍按上文协议手动执行；不能用“文件已存在”反推提交历史，也不能用 verify 修改已完成的记录。先建目录时可用连接器的创建文件夹工具，目标仍必须是 `/Anime/<番名>`。
 5. `--dry-run` 或 `dry_run: true` 只返回计划，不写入；清单来源必须是真实读取结果，禁止编造文件名或大小填充清单。

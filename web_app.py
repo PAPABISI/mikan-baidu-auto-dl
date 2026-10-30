@@ -326,7 +326,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/agent/verify":
                 return self._send(200, verify_listing(body["save_path"], body["files"],
                                                       body.get("source", "web"),
-                                                      apply=not body.get("dry_run", False)))
+                                                      apply=not body.get("dry_run", False),
+                                                      collection_id=body.get("collection")))
+            if path == "/api/collections/observe":
+                return self._send(200, catalog.observe_collection(body["collection_id"], body["episodes"],
+                                                                  body["evidence"], body.get("source", "user")))
             if path == "/api/agent/retry":
                 return self._send(200, {"job": catalog.retry(body["job_id"], body["evidence"])})
             if re.fullmatch(r"/api/metadata/[1-9]\d*", path):

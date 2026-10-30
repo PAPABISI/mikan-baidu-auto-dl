@@ -54,7 +54,7 @@ python --version
 | `agent_bridge.py` | 资源检查与准备流程 | 仅采集和准备；不发送网盘提交请求 |
 | `parse_mikan.py` | 解析资源、话数、版本、字幕及清晰度筛选 | Web、CLI 和调度使用同一套规则 |
 | `catalog.py` | 任务状态、领取、记录、去重和片库视图 | 真实状态变更走事务接口 |
-| `verify.py` | 网盘目录清单核验：话数唯一匹配后原子写入 COMPLETED 观察记录 | 匹配必须保守（歧义只报告）；清单由调用方的只读网盘工具提供，本模块不访问网络 |
+| `verify.py` | 网盘目录清单核验：话数唯一匹配后原子写入 COMPLETED 观察记录；无任务但被合集覆盖的话数按合集建记录 | 匹配必须保守（歧义只报告）；多合集覆盖同一话需显式指定；清单由调用方的只读网盘工具提供，本模块不访问网络 |
 | `storage.py` / `filelock.py` | 配置验证、文件锁、原子写入 | 网络操作不能占着写锁等待 |
 | `metadata.py` | Bangumi 资料读取、字段规范化 | 区分番剧 ID、评分人数与资料时间 |
 | `season.py` | 季度浏览、分页与公开资料缓存 | 请求失败与旧缓存必须有明确提示 |
@@ -143,7 +143,7 @@ git commit -m "docs: document development workflow and local-first roadmap"
 
 旧 `last_episode` 只是历史配置，不能当作已入盘证据。也不能用它过滤掉未来资源库中的所有旧资源；补番、版本切换和观看进度回退都需要保留记录。
 
-合集保存在同一片库的独立 collections 候选中，普通 jobs 仍只承载单话任务。标题范围与实际文件覆盖分开，不按一个磁力虚构多话任务或已完成进度；当前识别与复制入口不等于已经实现合集下载和核验状态机。
+合集保存在同一片库的独立 collections 候选中，普通 jobs 仍只承载单话任务；合集入盘后用 `origin=collection` 的记录表达真实文件，不把候选本身当进度。标题范围与实际文件覆盖分开，不按一个磁力虚构多话任务或已完成进度。合集核验入口：`verify --collection`、`agent_cli.py collection-observe`、POST `/api/collections/observe`（Web 合集卡“记录该合集入盘”）。
 
 ### 5.2 任务状态与证据
 

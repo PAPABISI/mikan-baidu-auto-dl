@@ -7,7 +7,7 @@ labels.COLLECTION = '发现合集';
 let library = {series:[],jobs:[],events:[],stats:{},scheduler:{}};
 let selectedId = null, draft = null, editingIndex = null, chosenBangumi = null, searchSequence = 0;
 let pollTimer = null, toastTimer = null, fetching = false;
-let observationJobs = [], selectedJobs = new Set();
+let observationJobs = [], observationCollection = null, selectedJobs = new Set();
 let renderedData = '';
 let activeView = 'library', availableVariants = [], preferredGroups = [], suggestedBangumi = null;
 let collectionSupport = true;
@@ -140,11 +140,12 @@ function canObserve(job) {
 }
 function collectionCards(items) {
   if (!items.length) return '';
-  return '<p class="muted">合集范围来自资源标题，需核对实际文件与已有记录；合集不自动入队，也不计作单话进度。</p>' + items.map(item =>
+  return '<p class="muted">合集范围来自资源标题，需核对实际文件与已有记录；合集不自动入队，也不计作单话进度。网盘已能看到文件时，可记录入盘为覆盖的话数留下证据。</p>' + items.map(item =>
     '<article class="collection-card"><div class="collection-heading"><strong>' + esc(item.episode_label) + '</strong><button type="button" class="text-button" data-copy-collection="' +
     esc(item.infohash) + '">复制合集磁力</button></div><p>' + esc(item.title) + '</p><div class="chips"><span class="chip">' + esc(item.group) + '</span><span class="chip">' +
     esc(item.lang) + esc(item.subtitle_type) + ' · ' + esc(item.resolution) + '</span><span class="chip">' + esc(item.size || '大小未知') + '</span></div>' +
     (Number.isInteger(item.variant_index) ? '<p><button type="button" class="text-button" data-collection-variant="' + item.variant_index + '">选用此合集的字幕版本</button></p>' : '') +
+    (item.id ? '<p><button type="button" class="text-button" data-action="observe-collection" data-collection="' + esc(item.id) + '">记录该合集入盘</button></p>' : '') +
     (item.matches_preferences === false ? '<p class="collection-note">与当前字幕偏好不符，仅供手动选择。</p>' : '') +
     (item.overlap_episodes?.length ? '<p class="collection-note">包含已有执行中、已入盘或待核验记录的话数：' + esc(item.overlap_episodes.join('、')) + '，请核对重复。</p>' : '') +
     '<details><summary class="muted">磁力文本</summary><code class="collection-magnet">' + esc(item.magnet) + '</code></details></article>').join('');
@@ -167,6 +168,8 @@ function updateJobSelection() {
 }
 function openObservation(jobs, state='SUBMITTED') {
   observationJobs = jobs.map(job => job.id);
+  observationCollection = null;
+  $('#observe-range-row').hidden = true; $('#observe-state').disabled = false;
   $('#observe-heading').textContent = state === 'COMPLETED' ? '核实入盘' : '记录手动添加结果';
   $('#observe-title').textContent = jobs[0].series_name + ' · 共 ' + jobs.length + ' 话';
   $('#observe-jobs').innerHTML = jobs.map(job => '<li><strong>第 ' + esc(job.episode) + ' 话' +
@@ -174,6 +177,34 @@ function openObservation(jobs, state='SUBMITTED') {
   $('#observe-evidence').value = ''; $('#observe-state').value = state;
   $('#observe-error').hidden = true;
   $('#save-observe').textContent = '确认并保存 ' + jobs.length + ' 话';
+  $('#observe-dialog').showModal();
+}
+function parseEpisodes(text) {
+  const episodes = [];
+  for (const chunk of (text || '').split(/[,，、\s]+/).filter(Boolean)) {
+    const range = chunk.match(/^(\d+)\s*[-~～至]\s*(\d+)$/);
+    if (range) {
+      const start = Number(range[1]), end = Number(range[2]);
+      if (start > end) throw new Error('话数范围起止颠倒：' + chunk);
+      for (let value = start; value <= end; value++) episodes.push(value);
+    } else if (/^\d+$/.test(chunk)) episodes.push(Number(chunk));
+    else throw new Error('无法识别的话数：' + chunk);
+  }
+  if (!episodes.length) throw new Error('请填写网盘已可见的话数，例如 1-12');
+  return episodes;
+}
+function openCollectionObservation(collection) {
+  const s = library.series.find(item => item.mikan_id === selectedId);
+  observationJobs = []; observationCollection = collection;
+  $('#observe-heading').textContent = '记录合集入盘';
+  $('#observe-title').textContent = (s ? s.name + ' · ' : '') + collection.episode_label + ' · ' + collection.group;
+  $('#observe-jobs').innerHTML = '<li><strong>' + esc(collection.title) + '</strong><span>合集不生成逐话任务；确认后只为网盘已可见的话数写入入盘记录。</span><code>' +
+    esc(collection.save_path) + '</code></li>';
+  $('#observe-episodes').value = Number.isInteger(collection.episode_start) ? collection.episode_start + '-' + collection.episode_end : '';
+  $('#observe-range-row').hidden = false;
+  $('#observe-state').value = 'COMPLETED'; $('#observe-state').disabled = true;
+  $('#observe-evidence').value = ''; $('#observe-error').hidden = true;
+  $('#save-observe').textContent = '确认合集已入盘';
   $('#observe-dialog').showModal();
 }
 function renderDetail() {
@@ -208,7 +239,7 @@ function renderDetail() {
       (j.observation_source === 'user' ? ' · 用户确认' : '') + '</div></td><td><button class="text-button" data-action="copy-magnet" data-job="' + j.id + '">复制磁力</button>' +
       (canObserve(j) ? '<div><button class="text-button" data-action="observe" data-job="' + j.id + '">记录手动结果</button></div>' : '') +
       (j.state === 'FAILED' ? '<div><button class="text-button" data-action="retry" data-job="' + j.id + '">重试失败任务</button></div>' : '') +
-      '</td></tr>').join('') + '</tbody></table>' + (!jobs.length ? '<p class="muted">尚无普通单话任务；已发现的合集会在下方单独展示。</p>' : '') + '</div>' +
+      '</td></tr>').join('') + '</tbody></table>' + (!jobs.length ? '<p class="muted">尚无普通单话任务；已发现的合集会在下方单独展示，网盘已能看到文件时可在合集卡上记录入盘。</p>' : '') + '</div>' +
     '<div class="detail-actions"><span class="muted">网盘已受理 ≠ 文件已入盘；未知结果需先核验。</span><button class="button quiet" data-action="edit">编辑追番偏好</button></div>';
   if (s.collections?.length) $('#detail-content').insertAdjacentHTML('beforeend','<section class="collection-panel"><h3>合集资源 · ' + s.collections.length + ' 个候选</h3>' + collectionCards(s.collections) + '</section>');
   updateJobSelection();
@@ -427,6 +458,10 @@ $('#detail-content').addEventListener('click',async event => {
   if (button.dataset.action === 'observe' && job) {
     openObservation([job]);
   }
+  if (button.dataset.action === 'observe-collection') {
+    const collection = (s?.collections || []).find(item => item.id === button.dataset.collection);
+    if (collection) openCollectionObservation(collection);
+  }
   if (button.dataset.action === 'observe-selected') {
     const jobs = (s.jobs || []).filter(job => selectedJobs.has(job.id) && canObserve(job));
     if (jobs.length) openObservation(jobs, 'COMPLETED');
@@ -488,6 +523,16 @@ $('#observe-form').onsubmit = async event => {
   $('#observe-error').hidden = true;
   const ids = [...observationJobs];
   try {
+    if (observationCollection) {
+      const collection = observationCollection;
+      const result = await api('/api/collections/observe','POST',{
+        collection_id:collection.id,episodes:parseEpisodes($('#observe-episodes').value),
+        evidence:$('#observe-evidence').value.trim(),source:'user'});
+      observationCollection = null;
+      $('#observe-dialog').close();
+      toast('已记录 ' + result.recorded.length + ' 话入盘' + (result.skipped.length ? '，' + result.skipped.length + ' 话已有记录未覆盖' : ''));
+      await poll(); return;
+    }
     const batch = ids.length > 1;
     await api(batch ? '/api/agent/observe-batch' : '/api/agent/observe','POST',{
       ...(batch ? {job_ids:ids} : {job_id:ids[0]}),state:$('#observe-state').value,evidence:$('#observe-evidence').value.trim(),source:'user'});

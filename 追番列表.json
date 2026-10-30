@@ -46,6 +46,24 @@
       "cover_url": "https://mikanani.me/images/Bangumi/202610/3de10b95.jpg?width=400&height=400&format=webp",
       "notes": "",
       "added_at": "2026-10-30"
+    },
+    {
+      "mikan_id": 2487,
+      "name": "漂流少年",
+      "subtitle_groups": [],
+      "language": "简体",
+      "embedded_only": true,
+      "save_path": "/Anime/漂流少年",
+      "last_episode": "0",
+      "last_check": null,
+      "last_check_status": null,
+      "last_check_detail": null,
+      "cover_url": "https://mikanani.me/images/Bangumi/202107/a8849452.jpg?width=400&height=400&format=webp",
+      "notes": "",
+      "added_at": "2026-10-30",
+      "subtitle_type": "内嵌",
+      "resolution": "不限",
+      "strict_groups": true
     }
   ]
 }
