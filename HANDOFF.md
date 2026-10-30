@@ -2,6 +2,10 @@
 
 本节覆盖后面的早期 API 方案。请先读 README.md 与 AGENTS.md。
 
+分页截断修复（2026-10-30）：用户指出漂流少年卡片显示 10/12 但实际 12 话都在网盘。复核发现百度网盘连接器 `file_list` **每页最多 10 项**（page=1 返回 10 项，page=2 返回 05、06），而工具描述写成“不分页返回所有”，前一次的核验据此把 05/06 误报为缺失。修复：`verify_listing(..., complete=False)` 新增 `listing.suspect_truncated`（条目数≥10 且为 10 的倍数时警告）、`warnings`、`collection_missing_episodes[].certain`；`_normalize` 按文件名+大小去重，分页重叠不再被当成“同话多文件”歧义；CLI `--input` 可重复并合并多页、新增 `--complete`；HTTP body 支持 `complete`。AGENTS.md 补充“必须翻页取全”的协议。
+
+同批次合集沿用（2026-10-30，分支 B）：补全 05/06 时发现即使取全两页，这类“被 16 个合集候选同时覆盖”的话数仍会因歧义而拒绝写入。新增确定性规则：同目录已入盘记录的 `collection_id` 只有一个且该合集覆盖本话时自动沿用（`selected_by=same_batch`）；同目录已用过两个不同合集时仍返回 `collection_choices`（新增 `recorded_collection_ids` 提示）。真实数据：漂流少年 12/12 全部 COMPLETED（05、06 为 same_batch），缺失列表为空。
+
 合集入盘核验（2026-10-30，分支 B）：用户反馈“添加合集后无法点击核实入盘”。根因是合集只存候选、不建逐话任务，详情页没有任何可勾选任务，`/api/agent/observe*` 也只接受已有 job_id。现改为：网盘清单里存在、但该话没有任务且被某个合集候选覆盖时，按建议真实文件建立 `origin=collection` 的 COMPLETED 记录（`catalog._record_collection_episode`）；多个候选合集都能覆盖同一话时必须用 `--collection`/`collection` 指定，否则只返回 `collection_choices`；合集范围内尚未入盘的话数在 `collection_missing_episodes` 报告；执行中/已入盘/已替换的话数只进 `skipped_collection_episodes`。Web 合集卡新增“记录该合集入盘”（可改话数，如 `1-12`/`1,2,5`），走 POST `/api/collections/observe`（source=user）；CLI 对应 `collection-observe`。真实验收：漂流少年 01-12 合集（喵萌奶茶屋 1080p 简体）已入盘，网盘实测只有 01-04、07-12 共 10 个文件，已核验入盘 10 话，05/06 报告为缺失；140 项 Python 测试通过。
 
 分支 B 新增网盘连接器核验：`verify.py` + `agent_cli.py verify` + POST `/api/agent/verify`。调用方（Agent）用百度网盘连接器的只读目录浏览取 `/Anime/<番名>` 文件清单后提交，程序按话数唯一匹配并原子写入 COMPLETED（source=web，证据含真实文件名与大小）；同一话多文件/多任务、执行中或已完成任务只报告不写入，`--dry-run` 只出计划。连接器无离线下载接口，云添加仍手动。已验证 131 项 Python 测试（含 11 项 verify 单测与 1 项 HTTP 路由测试）通过。本工作副本默认端口 8785；另一副本（D:/GitRepository/MiKan）归其他 AI 维护，勿动其进程与数据。

@@ -15,6 +15,7 @@ from parse_mikan import collection_info, ep_of
 
 OBSERVABLE_STATES = ("READY", "SUBMITTED", "DOWNLOADING", "UNKNOWN", "FAILED")
 MAX_FILES = 1000
+PAGE_SIZE_HINT = 10  # 百度网盘连接器 file_list 实测每页最多 10 项，不能用单页结果断言“未入盘”
 
 
 def _size_text(size):
@@ -36,7 +37,7 @@ def evidence_for(save_path, filename, size=None, collection=None):
 def _normalize(files):
     if not isinstance(files, list) or not files or len(files) > MAX_FILES:
         raise ValueError(f"请提供 1 到 {MAX_FILES} 项的网盘文件清单")
-    normalized = []
+    normalized, seen = [], set()
     for item in files:
         if not isinstance(item, dict):
             raise ValueError("文件条目必须是对象")
@@ -51,7 +52,13 @@ def _normalize(files):
         isdir = item.get("isdir", False)
         if not isinstance(isdir, bool):
             raise ValueError("isdir 必须是布尔值")
-        normalized.append({"filename": name.strip(), "size": size, "isdir": isdir})
+        entry = {"filename": name.strip(), "size": size, "isdir": isdir}
+        # 分页可能出现重叠项；同一文件重复出现不是歧义，按文件名与大小去重。
+        key = (entry["filename"], size, isdir)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(entry)
     return normalized
 
 
@@ -60,19 +67,33 @@ def _covers(collection, episode):
     return start is not None and end is not None and Decimal(start) <= episode <= Decimal(end)
 
 
-def verify_listing(save_path, files, source="web", apply=True, collection_id=None):
+def verify_listing(save_path, files, source="web", apply=True, collection_id=None, complete=False):
     """用一份网盘目录文件清单核验该目录下的任务并记录入盘证据。
 
     source=web 表示调用方（Agent）通过授权接口亲自观察到网盘文件；source=user
     仅在用户明确提供清单并确认时使用。apply=False 只生成计划，不写入。
     collection_id 用于在多个合集候选都能覆盖同一话时指定归属（合集编号或 infohash）。
+    complete=True 表示调用方已把连接器各页取全（最后一页不足 PAGE_SIZE_HINT 项）；
+    否则条目数正好是每页上限时只警告“可能被截断”，不把缺失话数当成结论。
     """
     catalog.check_target(save_path)
     if source not in ("user", "web"):
         raise ValueError("观察来源必须是 user 或 web")
     if collection_id is not None and (not isinstance(collection_id, str) or not collection_id.strip()):
         raise ValueError("合集编号必须是非空字符串")
+    if not isinstance(complete, bool):
+        raise ValueError("complete 必须是布尔值")
     normalized = _normalize(files)
+    suspect_truncated = (not complete and len(normalized) >= PAGE_SIZE_HINT
+                         and len(normalized) % PAGE_SIZE_HINT == 0)
+    warnings = []
+    if suspect_truncated:
+        warnings.append(f"清单共 {len(normalized)} 项，正好是连接器每页上限（{PAGE_SIZE_HINT} 项），"
+                        "目录可能还有后续页；请用 page=1..n 取全后重新核验，缺失话数只作待确认")
+    else:
+        deduped = len(files) - len(normalized)
+        if deduped:
+            warnings.append(f"清单含 {deduped} 项重复条目，已按文件名与大小去重")
 
     def update(data):
         observable = [job for job in data["jobs"].values()
@@ -110,6 +131,10 @@ def verify_listing(save_path, files, source="web", apply=True, collection_id=Non
         config = catalog.series_for_path(save_path)
         candidates = [item for item in data.get("collections", {}).values()
                       if config and item.get("mikan_id") == config["mikan_id"] and item.get("save_path") == save_path]
+        # 同一目录里已经入盘的话数都来自某个合集时，剩余文件默认属于同一批；
+        # 仅当该合集也覆盖本话、且历史上只有一个合集被用过时才沿用，否则仍要求指定。
+        recorded_ids = {job.get("collection_id") for job in data["jobs"].values()
+                        if job.get("save_path") == save_path and job.get("collection_id")}
         linked, used, skipped = set(), {}, []
         for episode in sorted(set(files_by_ep) - set(jobs_by_ep)):
             entries = files_by_ep[episode]
@@ -127,19 +152,25 @@ def verify_listing(save_path, files, source="web", apply=True, collection_id=Non
             if collection_id:
                 chosen = next((item for item in covering
                                if collection_id.strip() in (item["id"], item["infohash"])), None)
+                chosen_from = "explicit"
             elif len(covering) == 1:
                 chosen = covering[0]
+                chosen_from = "single"
             else:
-                chosen = None
+                reused = [item for item in covering if item["id"] in recorded_ids]
+                chosen = reused[0] if len(reused) == 1 else None
+                chosen_from = "same_batch" if chosen else None
             if chosen is None:
                 choices.append({"episode": entries[0]["filename"],
+                                "recorded_collection_ids": sorted(recorded_ids),
                                 "candidates": [{"id": item["id"], "infohash": item["infohash"],
                                                 "title": item["title"], "episode_label": item["episode_label"]}
                                                for item in covering]})
                 continue
             entry = entries[0]
             created.append({"episode": catalog.episode_text(episode), "filename": entry["filename"], "size": entry["size"],
-                            "collection_id": chosen["id"], "collection_title": chosen["title"]})
+                            "collection_id": chosen["id"], "collection_title": chosen["title"],
+                            "selected_by": chosen_from})
             linked.add(episode)
             used[chosen["id"]] = chosen
             if apply:
@@ -153,9 +184,13 @@ def verify_listing(save_path, files, source="web", apply=True, collection_id=Non
                       range(int(item["episode_start"]), int(item["episode_end"]) + 1)
                       if Decimal(ep) not in files_by_ep]
             missing.append({"collection_id": item["id"], "episode_label": item["episode_label"],
-                            "episode_title": item["title"], "episodes": absent})
+                            "episode_title": item["title"], "episodes": absent,
+                            "certain": not suspect_truncated})
         return {
             "save_path": save_path, "source": source, "applied": apply,
+            "listing": {"files": len(normalized), "declared_complete": complete,
+                        "suspect_truncated": suspect_truncated, "page_size_hint": PAGE_SIZE_HINT},
+            "warnings": warnings,
             "recorded": [catalog.public_job(job) for job, _ in matches] if apply else [],
             "matched": planned,
             "created_from_collection": created,

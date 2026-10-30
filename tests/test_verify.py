@@ -198,6 +198,29 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual(len(chosen["created_from_collection"]), 1)
         self.assertEqual(self.jobs_by_episode()["01"]["collection_id"], first["id"])
 
+    def test_uncovered_episode_reuses_collection_already_recorded_in_same_directory(self):
+        first = self.add_collection("c")
+        self.add_collection("d", group="另一个组")
+        # 第 01 话先按显式指定入盘，第 02 话随后出现：同目录只用一个合集，自动沿用。
+        verify.verify_listing("/Anime/测试番", [file_entry("01")], collection_id=first["id"])
+        plan = verify.verify_listing("/Anime/测试番", [file_entry("02")])
+        self.assertEqual(plan["collection_choices"], [])
+        self.assertEqual([(item["episode"], item["selected_by"]) for item in plan["created_from_collection"]],
+                         [("02", "same_batch")])
+        self.assertEqual(self.jobs_by_episode()["02"]["collection_id"], first["id"])
+
+    def test_two_recorded_collections_still_need_explicit_choice(self):
+        first = self.add_collection("c")
+        second = self.add_collection("d", group="另一个组")
+        verify.verify_listing("/Anime/测试番", [file_entry("01")], collection_id=first["id"])
+        verify.verify_listing("/Anime/测试番", [file_entry("03")], collection_id=second["id"])
+        # 同一目录已用过两个不同合集，无法判断 02 属于谁，必须显式指定。
+        plan = verify.verify_listing("/Anime/测试番", [file_entry("02")])
+        self.assertEqual(plan["created_from_collection"], [])
+        self.assertEqual(len(plan["collection_choices"]), 1)
+        self.assertEqual(sorted(plan["collection_choices"][0]["recorded_collection_ids"]),
+                         sorted([first["id"], second["id"]]))
+
     def test_unknown_collection_id_is_rejected_without_writing(self):
         self.add_collection(start=1, end=3)
         with self.assertRaises(ValueError):
@@ -212,6 +235,49 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual(plan["created_from_collection"], [])
         self.assertEqual([item["episode"] for item in plan["skipped_collection_episodes"]], ["01"])
         self.assertEqual(self.job_state(job["id"]), "CLAIMED")
+
+    def test_listing_at_page_limit_is_flagged_as_possibly_truncated(self):
+        self.add_collection()
+        plan = verify.verify_listing("/Anime/测试番", [file_entry(f"{ep:02d}") for ep in range(1, 11)], apply=False)
+        self.assertEqual(plan["listing"]["files"], 10)
+        self.assertTrue(plan["listing"]["suspect_truncated"])
+        self.assertTrue(plan["warnings"])
+        self.assertFalse(plan["collection_missing_episodes"][0]["certain"])
+
+    def test_declared_complete_listing_has_no_warning(self):
+        self.add_collection()
+        plan = verify.verify_listing("/Anime/测试番", [file_entry(f"{ep:02d}") for ep in range(1, 13)],
+                                     apply=False, complete=True)
+        self.assertFalse(plan["listing"]["suspect_truncated"])
+        self.assertEqual(plan["warnings"], [])
+        self.assertEqual(plan["collection_missing_episodes"][0]["episodes"], [])
+        self.assertTrue(plan["collection_missing_episodes"][0]["certain"])
+
+    def test_overlapping_pages_are_deduped_not_ambiguous(self):
+        self.enqueue_all(("01",))
+        plan = verify.verify_listing("/Anime/测试番", [file_entry("01"), file_entry("01")])
+        self.assertEqual(plan["ambiguous"], [])
+        self.assertEqual(len(plan["recorded"]), 1)
+
+    def test_cli_verify_merges_paginated_inputs(self):
+        self.add_collection()
+        first = os.path.join(self.tmp.name, "page1.json")
+        second = os.path.join(self.tmp.name, "page2.json")
+        with open(first, "w", encoding="utf-8") as stream:
+            json.dump({"save_path": "/Anime/测试番",
+                       "files": [file_entry(f"{ep:02d}") for ep in range(1, 11)]}, stream, ensure_ascii=False)
+        with open(second, "w", encoding="utf-8") as stream:
+            json.dump({"files": [file_entry("11"), file_entry("12"), file_entry("01")]}, stream, ensure_ascii=False)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = agent_cli.main(["verify", "--input", first, "--input", second, "--complete"])
+        self.assertEqual(code, 0)
+        data = json.loads(buffer.getvalue())["data"]
+        self.assertEqual(len(data["created_from_collection"]), 12)
+        self.assertFalse(data["listing"]["suspect_truncated"])
+        # 第二页与第一页重叠了一项，去重后仍然只按真实文件计数。
+        self.assertEqual(data["listing"]["files"], 12)
+        self.assertTrue(any("重复" in message for message in data["warnings"]))
 
     def test_observe_collection_records_user_confirmation(self):
         record = self.add_collection(start=1, end=3)

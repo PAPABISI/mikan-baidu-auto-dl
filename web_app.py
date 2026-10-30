@@ -327,7 +327,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, verify_listing(body["save_path"], body["files"],
                                                       body.get("source", "web"),
                                                       apply=not body.get("dry_run", False),
-                                                      collection_id=body.get("collection")))
+                                                      collection_id=body.get("collection"),
+                                                      complete=body.get("complete", False)))
             if path == "/api/collections/observe":
                 return self._send(200, catalog.observe_collection(body["collection_id"], body["episodes"],
                                                                   body["evidence"], body.get("source", "user")))

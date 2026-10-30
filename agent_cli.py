@@ -42,9 +42,10 @@ def main(argv=None):
     observe = commands.add_parser("observe", help="记录用户确认或网页可见的手动添加/已存在结果")
     observe.add_argument("--input", default="-")
     verify = commands.add_parser("verify", help="用网盘目录文件清单核验任务并记录入盘证据")
-    verify.add_argument("--input", default="-")
+    verify.add_argument("--input", action="append", help="可重复；多页清单会合并 files，首个文件提供 save_path 等参数")
     verify.add_argument("--dry-run", action="store_true", help="只生成核验计划，不写入记录")
     verify.add_argument("--collection", help="合集编号或 infohash；多个候选都能覆盖同一话时必须指定")
+    verify.add_argument("--complete", action="store_true", help="已把连接器各页取全（最后一页不足 10 项）")
     collection_observe = commands.add_parser("collection-observe", help="记录用户确认某合集已入盘，为覆盖的话数写入记录")
     collection_observe.add_argument("--input", default="-")
     commands.add_parser("library", help="导出不含凭据的 Web 数据")
@@ -100,16 +101,24 @@ def main(argv=None):
             else:
                 result = catalog.observe(body["job_id"], body["state"], body["evidence"], body["source"])
         elif args.command == "verify":
-            if args.input == "-":
-                body = json.load(sys.stdin)
-            else:
-                with open(args.input, encoding="utf-8-sig") as stream:
-                    body = json.load(stream)
-            if not isinstance(body, dict):
-                raise ValueError("输入必须是 JSON 对象")
-            result = verify_listing(body["save_path"], body["files"], body.get("source", "web"),
-                                    apply=(not args.dry_run and body.get("apply", True)),
-                                    collection_id=args.collection or body.get("collection"))
+            bodies = []
+            for path in (args.input or ["-"]):
+                if path == "-":
+                    body = json.load(sys.stdin)
+                else:
+                    with open(path, encoding="utf-8-sig") as stream:
+                        body = json.load(stream)
+                if not isinstance(body, dict):
+                    raise ValueError("输入必须是 JSON 对象")
+                bodies.append(body)
+            merged = bodies[0]
+            if len(bodies) > 1:
+                # 连接器目录按页返回，多页清单在这里合并；顺序不影响匹配。
+                merged = {**bodies[0], "files": [item for body in bodies for item in body.get("files", [])]}
+            result = verify_listing(merged["save_path"], merged["files"], merged.get("source", "web"),
+                                    apply=(not args.dry_run and merged.get("apply", True)),
+                                    collection_id=args.collection or merged.get("collection"),
+                                    complete=args.complete or bool(merged.get("complete")))
         else:
             result = catalog.snapshot()
         print(json.dumps({"ok": True, "data": result}, ensure_ascii=False, indent=2))
