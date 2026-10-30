@@ -232,6 +232,36 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(state["status"], "READY")
         self.assertEqual(len(catalog.snapshot()["jobs"]), 1)
 
+    def test_prepare_replaces_legacy_official_override_with_bangumi(self):
+        catalog.save_metadata(4059, {"bangumi_id": 1, "broadcast_weekday": 5,
+                                   "broadcast_source": "https://example.com/onair", "broadcast_time": "20:30",
+                                   "broadcast_timezone": "Asia/Shanghai", "metadata_updated_at": catalog.now()})
+        fresh = metadata.normalize_subject({"id": 1, "infobox": [{"key": "放送星期", "value": "星期四"}]})
+        with patch.object(auto_dl, "fetch_mikan", return_value="HTML"), \
+             patch.object(agent_bridge, "parse_mikan", return_value=[resource()]), \
+             patch.object(metadata, "get_subject", return_value=fresh) as request, \
+             contextlib.redirect_stdout(io.StringIO()):
+            agent_bridge.prepare()
+        request.assert_called_once_with(1)
+        data = catalog.load()["metadata"]["4059"]
+        self.assertEqual(data["broadcast_weekday"], 4)
+        self.assertEqual(data["broadcast_source"], "https://bgm.tv/subject/1")
+        self.assertIsNone(data["broadcast_time"])
+
+    def test_failed_bangumi_refresh_preserves_metadata_and_reports_error(self):
+        values = {"bangumi_id": 1, "broadcast_weekday": 5, "broadcast_source": "https://example.com/onair"}
+        catalog.save_metadata(4059, values)
+        with patch.object(auto_dl, "fetch_mikan", return_value="HTML"), \
+             patch.object(agent_bridge, "parse_mikan", return_value=[resource()]), \
+             patch.object(metadata, "get_subject", side_effect=OSError("offline")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            result = agent_bridge.prepare()
+        self.assertEqual(result["status"], "GENERIC")
+        self.assertIn("Bangumi", result["errors"][0]["msg"])
+        data = catalog.load()["metadata"]["4059"]
+        for key, value in values.items():
+            self.assertEqual(data[key], value)
+
     def test_cli_is_machine_readable_json(self):
         self.ready()
         output = io.StringIO()
@@ -256,6 +286,14 @@ class MetadataTests(unittest.TestCase):
         data = metadata.release_pattern([resource(), resource("02", "b")])
         self.assertEqual(data["release_weekdays"], [5])
         self.assertIn("推测", data["release_note"])
+
+    def test_bangumi_weekday_does_not_fall_back_to_premiere_date(self):
+        data = metadata.normalize_subject({"id": 1, "date": "2026-10-01", "infobox": []})
+        self.assertIsNone(data["broadcast_weekday"])
+        self.assertIsNone(data["broadcast_time"])
+        self.assertIsNone(data["broadcast_timezone"])
+        self.assertEqual(data["broadcast_source"], "https://bgm.tv/subject/1")
+
 
 
 if __name__ == "__main__":

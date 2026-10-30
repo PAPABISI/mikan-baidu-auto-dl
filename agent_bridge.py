@@ -42,13 +42,12 @@ def prepare(mikan_id=None):
                 meta = catalog.load()["metadata"].get(str(item["mikan_id"]), {})
                 if meta.get("bangumi_id"):
                     stamp = meta.get("metadata_updated_at")
-                    stale = not stamp or dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(stamp) > dt.timedelta(days=7)
+                    expected_source = f"https://bgm.tv/subject/{meta['bangumi_id']}"
+                    stale = (meta.get("broadcast_source") != expected_source or not stamp
+                             or dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(stamp) > dt.timedelta(days=7))
                     if stale:
                         try:
                             fresh = metadata.get_subject(meta["bangumi_id"])
-                            if meta.get("broadcast_source") and "bgm.tv/subject/" not in meta["broadcast_source"]:
-                                for field in ("broadcast_weekday", "broadcast_source", "broadcast_note"):
-                                    fresh.pop(field, None)
                             catalog.save_metadata(item["mikan_id"], fresh)
                         except Exception as error:
                             # 资料站不可用不能挡住已解析到的资源，也不能假装资料更新成功。

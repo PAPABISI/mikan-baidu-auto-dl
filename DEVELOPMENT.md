@@ -95,6 +95,7 @@ JavaScript 改变后检查相应文件；当前两个入口为：
 ```powershell
 node --check static/app.js
 node --check static/season.js
+node --test tests/test_calendar.cjs
 ```
 
 界面改变时启动或复用本地 Web，使用当前环境允许的浏览器工具验证实际控件、加载/错误状态、保存后的回读和页面显示。测试写入使用临时配置与临时库；真实网盘不能充当测试环境。调用真实公开站点进行只读验证时，控制请求数量，不运行无关批量采集。

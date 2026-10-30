@@ -43,6 +43,10 @@ function poster(url) {
 function titleFor(sid) {
   return library.series.find(s => s.mikan_id === sid)?.name || library.jobs.find(j => j.mikan_id === sid)?.series_name || ('蜜柑 #' + sid);
 }
+function bangumiWeekday(series) {
+  if (!series.bangumi_id || series.broadcast_source !== 'https://bgm.tv/subject/' + Number(series.bangumi_id)) return null;
+  return Number.isInteger(series.broadcast_weekday) && series.broadcast_weekday >= 1 && series.broadcast_weekday <= 7 ? series.broadcast_weekday : null;
+}
 function switchView(name) {
   activeView = name;
   for (const view of ['library','calendar','season','history']) $('#view-' + view).hidden = view !== name;
@@ -50,7 +54,7 @@ function switchView(name) {
   $('#executor-banner').hidden = name === 'season' || library.executor?.status !== 'BLOCKED';
   $$('nav button').forEach(button => button.classList.toggle('active',button.dataset.view === name));
   const titles = {library:'追番片库',calendar:'每周更新',season:'季度新番',history:'操作历史'};
-  const subtitles = {library:'新集、字幕组和入盘记录，都在这里。',calendar:'看清放送时间，也留意字幕组的发布节奏。',season:'从 Bangumi 发现新番，再到蜜柑挑选喜欢的字幕。',history:'每次添加后更新，把结果留在片架里。'};
+  const subtitles = {library:'新集、字幕组和入盘记录，都在这里。',calendar:'以 Bangumi 条目的官方放送星期为准。',season:'从 Bangumi 发现新番，再到蜜柑挑选喜欢的字幕。',history:'每次添加后更新，把结果留在片架里。'};
   $('#page-title').innerHTML = esc(titles[name]) + '<span class="dot">.</span>';
   $('#page-subtitle').textContent = subtitles[name];
   if (name === 'season') loadSeasonOnce();
@@ -91,6 +95,7 @@ function renderCards() {
     const pending = (st.SUBMITTING || 0) + (st.SUBMITTED || 0) + (st.DOWNLOADING || 0);
     const failed = (st.FAILED || 0) + (st.UNKNOWN || 0);
     const releaseDays = (s.release_weekdays || []).map(day => days[day]).join(' / ');
+    const weekday = bangumiWeekday(s);
     return '<article class="series-card" tabindex="0" role="button" aria-label="查看' + esc(s.name) + '" data-series="' + s.mikan_id + '">' +
       '<div class="poster">' + (image ? '<img loading="lazy" src="' + esc(image) + '" alt="' + esc(s.name) + '封面">' : '<div class="poster-placeholder">◒</div>') +
       '<span class="poster-label">' + (s.air_date ? esc(s.air_date.slice(0,7).replace('-',' / ')) : '追番中') + '</span>' +
@@ -99,8 +104,7 @@ function renderCards() {
       '<p class="original-name">' + esc(s.name_original || '蜜柑 #' + s.mikan_id) + '</p><div class="chips">' +
       '<span class="chip orange">' + esc(s.language || '简体') + (s.embedded_only !== false ? '内嵌' : '字幕') + '</span>' +
       '<span class="chip">' + esc((s.subtitle_groups || []).join(' / ') || '不限字幕组') + '</span></div>' +
-      '<div class="card-schedule"><span>◷</span><b>' + (s.broadcast_weekday ? '每' + esc(days[s.broadcast_weekday]) + '放送' : '放送日待核实') + '</b>' +
-      (s.broadcast_time ? ' · ' + esc(s.broadcast_time) : '') + '</div>' +
+      '<div class="card-schedule"><span>◷</span><b>' + (weekday ? '每' + esc(days[weekday]) + '放送 · Bangumi' : 'Bangumi 放送日待补充') + '</b></div>' +
       '<p class="release-note">' + (releaseDays ? '字幕通常' + esc(releaseDays) + ' · 推测' : '字幕发布时间以蜜柑更新为准') + '</p>' +
       '<div class="progress-label"><span>已核验入盘</span><b>' + done + ' <span>/ ' + (s.total_episodes || '—') + ' 话</span></b></div>' +
       '<div class="progress-track"><span style="width:' + percent + '%"></span></div>' +
@@ -113,14 +117,16 @@ function renderCalendar() {
   const today = ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'].indexOf(todayString);
   $('#calendar').innerHTML = days.slice(1).map((day,index) => {
     const number = index + 1;
-    const entries = library.series.flatMap(s => {
-      const out = [];
-      if (s.broadcast_weekday === number) out.push('<div class="calendar-item"><strong>' + esc(s.name) + '</strong><small class="air-label">放送 · ' + esc(s.broadcast_time || '时间待核实') + '</small></div>');
-      if ((s.release_weekdays || []).includes(number)) out.push('<div class="calendar-item"><strong>' + esc(s.name) + '</strong><small>字幕发布日推测</small></div>');
-      return out;
-    }).join('');
+    const entries = library.series.filter(s => bangumiWeekday(s) === number).map(s =>
+      '<div class="calendar-item"><a href="https://bgm.tv/subject/' + Number(s.bangumi_id) + '" target="_blank" rel="noopener"><strong>' +
+      esc(s.name) + '</strong><small class="air-label">Bangumi 放送日 ↗</small></a></div>').join('');
     return '<div class="day ' + (today === number ? 'today' : '') + '"><h3>' + day + (today === number ? '<small>今天</small>' : '') + '</h3>' + (entries || '<small class="muted">暂无计划</small>') + '</div>';
   }).join('');
+  const pending = library.series.filter(s => bangumiWeekday(s) === null);
+  $('#calendar-unscheduled').hidden = pending.length === 0;
+  $('#calendar-unscheduled').innerHTML = pending.length ? '<h3>放送日待补充</h3><p class="muted">以下番剧暂不归入星期，请在编辑追番时关联或更新 Bangumi 资料。</p>' +
+    pending.map(s => '<div class="calendar-item"><strong>' + esc(s.name) + '</strong><small>' +
+      (!s.bangumi_id ? '尚未关联 Bangumi' : s.broadcast_source !== 'https://bgm.tv/subject/' + Number(s.bangumi_id) ? 'Bangumi 放送资料待同步' : 'Bangumi 未提供固定放送星期') + '</small></div>').join('') : '';
 }
 function renderHistory() {
   $('#history').innerHTML = library.events.length ? library.events.map(e => '<div class="history-row"><time>' + esc(dateText(e.at)) +
@@ -155,6 +161,7 @@ function renderDetail() {
   const s = library.series.find(item => item.mikan_id === selectedId);
   if (!s) { $('#detail-dialog').close(); return; }
   const image = poster(s.cover_url);
+  const weekday = bangumiWeekday(s);
   const jobs = s.jobs || [];
   const eligibleIds = new Set(jobs.filter(canObserve).map(job => job.id));
   selectedJobs = new Set([...selectedJobs].filter(id => eligibleIds.has(id)));
@@ -165,9 +172,8 @@ function renderDetail() {
     esc(s.language) + esc(s.subtitle_type || (s.embedded_only !== false ? '内嵌' : '')) + '</span><span class="chip">' + esc((s.subtitle_groups || []).join(' / ') || '不限字幕组') +
     '</span><span class="chip">' + esc(s.resolution || '不限清晰度') + (s.strict_groups ? ' · 固定字幕组' : '') +
     '</span><span class="chip">共 ' + esc(s.total_episodes || '待核实') + ' 话</span></div><p class="detail-summary">' + esc(s.summary || '尚未关联番剧简介。可在编辑追番时关联 Bangumi 资料。') +
-    '</p></div></div><div class="detail-info"><span class="chip">' + (s.broadcast_weekday ? '每' + esc(days[s.broadcast_weekday]) + '放送' : '放送日待核实') +
-    (s.broadcast_time ? ' · ' + esc(s.broadcast_time) + ' ' + esc(s.broadcast_timezone || '') : '') + '</span><span class="chip">' +
-    esc(s.studio || '制作信息待补充') + '</span></div><p class="muted">' + esc(s.broadcast_note || '') + '</p>' +
+    '</p></div></div><div class="detail-info"><span class="chip">' + (weekday ? '每' + esc(days[weekday]) + '放送 · Bangumi' : 'Bangumi 放送日待补充') + '</span><span class="chip">' +
+    esc(s.studio || '制作信息待补充') + '</span></div><p class="muted">每周更新依据 Bangumi 放送星期，字幕资源发布时间可能不同。</p>' +
     '<div class="source-links"><a href="https://mikanani.me/Home/Bangumi/' + s.mikan_id + '" target="_blank" rel="noopener">蜜柑资源 ↗</a>' +
     (s.bangumi_id ? '<a href="https://bgm.tv/subject/' + Number(s.bangumi_id) + '" target="_blank" rel="noopener">Bangumi 资料 ↗</a>' : '') +
     '<a href="https://pan.baidu.com/disk/main" target="_blank" rel="noopener">百度网盘 ↗</a></div>' +
