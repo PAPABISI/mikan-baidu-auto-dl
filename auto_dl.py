@@ -1,316 +1,275 @@
 # -*- coding: utf-8 -*-
-"""
-每周追番流水线（自动化入口）
-流程: 加载追番列表 → 网页端登录态自检 → 遍历番剧抓蜜柑详情页 →
-      筛选字幕组/语言 → 对比已抓话数 → 提交新增磁力 → 回读任务状态 →
-      更新清单 → 清理临时文件
-失败语义（便于 automation 通知）:
-  QRCODE_NEEDED  登录态失效，需要扫码
-  NET_ERROR       网页端接入失败
-  NO_UPDATES      本周无新话（正常，不算失败）
-  GENERIC         其他错误
-"""
+"""配置驱动追番流水线。CLI 与 Web 共用；提交记录先落盘再发请求。"""
 import datetime as dt
-import http.cookiejar
 import json
 import os
-import re
-import subprocess
-import sys
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
+from decimal import Decimal
+
+from baidu import BaiduClient, LoginRequired, NETWORK_ERRORS, errno, make_opener, req, safe_error
 from filelock import FileLock
+from parse_mikan import parse_mikan, select_best, select_for_series
+from storage import BASE, load_list, mutate_list, read_json, write_json
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-LIST_FILE = os.path.join(BASE, "追番列表.json")
-LIST_LOCK = os.path.join(BASE, ".list.lock")
-COOKIE_FILE = os.path.join(BASE, ".baidu_cookies.json")
-QR_FILE = os.path.join(BASE, "login_qr.png")
 RUN_LOG = os.path.join(BASE, ".auto_dl_state.json")
-PROXY_WEB = "http://127.0.0.1:7897"  # Clash 出口
-
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-
-# ---------- 网络工具 ----------
-def make_opener(proxy=None):
-    jar = http.cookiejar.CookieJar()
-    handlers = [urllib.request.HTTPCookieProcessor(jar)]
-    if proxy:
-        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
-    else:
-        handlers.append(urllib.request.ProxyHandler({}))
-    return urllib.request.build_opener(*handlers), jar
+RUN_LOCK = os.path.join(BASE, ".run.lock")
+HISTORY_FILE = os.path.join(BASE, ".task_history.json")
+PROXY_WEB = os.environ.get("MIKAN_PROXY", "http://127.0.0.1:7897")
+PREF_KEYS = ("subtitle_groups", "language", "embedded_only", "save_path")
+TASK_STATUS = {
+    "0": "下载完成", "1": "下载中", "2": "系统错误", "3": "资源不存在",
+    "4": "下载超时", "5": "下载失败（可能被网盘过滤）", "6": "存储空间不足",
+    "7": "目标已存在，需人工核验", "8": "任务取消",
+}
 
 
-def req(opener, url, data=None, referer=None, timeout=20):
-    r = urllib.request.Request(url, data=data)
-    r.add_header("User-Agent", UA)
-    r.add_header("Accept", "*/*")
-    if referer:
-        r.add_header("Referer", referer)
-    with opener.open(r, timeout=timeout) as resp:
-        return resp.read()
+def fetch_mikan(mikan_id):
+    op, _ = make_opener(proxy=PROXY_WEB)
+    return req(op, f"https://mikanani.me/Home/Bangumi/{mikan_id}",
+               referer="https://mikanani.me/", timeout=30).decode("utf-8", "replace")
 
 
-def strip_callback(raw: bytes) -> dict:
-    txt = raw.decode("utf-8", "replace").strip()
-    m = re.match(r"^[^(]*\((.*)\)\s*;?$", txt, re.S)
-    return json.loads(m.group(1) if m else txt)
-
-
-# ---------- 蜜柑抓取（走代理） ----------
-def fetch_mikan(mikan_id: int):
-    """返回 HTML 文本。失败抛异常。"""
-    url = f"https://mikanani.me/Home/Bangumi/{mikan_id}"
-    op, _ = make_opener(PROXY_WEB)
-    data = req(op, url, referer="https://mikanani.me/", timeout=30)
-    return data.decode("utf-8", "replace")
-
-
-def parse_mikan(html_txt: str):
-    """复用 parse_mikan 逻辑，返回 strict 列表（简体内嵌）。"""
-    import html as htmllib
-    chunks = html_txt.split('<tr>')
-    items = []
-    for c in chunks:
-        if 'js-episode-select' not in c:
-            continue
-        m = re.search(r'data-magnet="([^"]+)"', c)
-        if not m:
-            continue
-        magnet = htmllib.unescape(m.group(1))
-        a = re.search(r'<a class="magnet-link-wrap"[^>]*>(.*?)</a>', c, re.S)
-        title = htmllib.unescape(re.sub(r'<[^>]+>', '', a.group(1))).strip() if a else ''
-        size = re.search(r'<td>\s*([\d.]+\s*[KMGT]i?B)\s*</td>', c)
-        items.append({
-            'title': title,
-            'magnet': magnet,
-            'infohash': magnet.split('btih:')[1].split('&')[0] if 'btih:' in magnet else '',
-            'size': size.group(1) if size else '',
-        })
-    # 去重
-    seen, uniq = set(), []
-    for it in items:
-        if it['infohash'] in seen:
-            continue
-        seen.add(it['infohash'])
-        uniq.append(it)
-
-    def subgroup(t):
-        m = re.search(r'[【\[]([^】\]]*?字幕组|[^】\]]*?压制组|[^】\]]*?字幕社)[】\]]', t)
-        return m.group(1) if m else (re.search(r'[【\[]([^】\]]*?)[】\]]', t).group(1) if re.search(r'[【\[]([^】\]]*?)[】\]]', t) else '未知')
-
-    def ep_of(t):
-        m = re.search(r'[\[［]\s*(\d{1,3}(?:\.\d)?)\s*v?(\d)?\s*[\]］]', t)
-        return (m.group(1), int(m.group(2)) if m and m.group(2) else 0) if m else ('?', 0)
-
-    for it in uniq:
-        t = it['title']
-        it['group'] = subgroup(t)
-        it['embedded'] = '内嵌' in t
-        it['chs'] = any(k in t for k in ('简体', '简日', '简中', 'CHS', 'GB'))
-        it['soft'] = '外挂' in t
-        ep, ver = ep_of(t)
-        it['ep'] = ep
-        it['ver'] = ver
-    return [i for i in uniq if i['embedded'] and i['chs'] and not i['soft']]
-
-
-def select_best(items, preferred_groups):
-    """每话选一条：优先首选字幕组，其次最早发布版本（v1 优先于 v2）。"""
-    by_ep = {}
-    for it in items:
-        ep = it['ep']
-        if ep == '?':
-            continue
-        # 优先首选字幕组
-        score = (0 if it['group'] in preferred_groups else 1, it['ver'])
-        if ep not in by_ep or score < by_ep[ep][0]:
-            by_ep[ep] = (score, it)
-    return [by_ep[ep][1] for ep in sorted(by_ep, key=lambda x: (len(x), x))]
-
-
-# ---------- 百度网盘 ----------
-def baidu_opener(cookies):
-    jar = http.cookiejar.CookieJar()
-    for k, v in cookies.items():
-        ck = http.cookiejar.Cookie(0, k, v, None, False, ".baidu.com", True, True,
-                                   "/", True, False, None, False, None, None, {}, False)
-        jar.set_cookie(ck)
-    return urllib.request.build_opener(
-        urllib.request.ProxyHandler({}),
-        urllib.request.HTTPCookieProcessor(jar)), jar
-
-
-def check_login(opener):
-    """True=登录态有效"""
-    try:
-        u = ('https://pan.baidu.com/api/gettemplatevariable?clienttype=0&app_id=250528&web=1'
-             '&fields=' + urllib.parse.quote('["bdstoken"]'))
-        d = json.loads(req(opener, u, referer="https://pan.baidu.com/disk/main", timeout=15))
-        return bool((d.get("result") or {}).get("bdstoken"))
-    except Exception:
-        return False
-
-
-def get_bdstoken(opener):
-    u = ('https://pan.baidu.com/api/gettemplatevariable?clienttype=0&app_id=250528&web=1'
-         '&fields=' + urllib.parse.quote('["bdstoken"]'))
-    d = json.loads(req(opener, u, referer="https://pan.baidu.com/disk/main", timeout=15))
-    return (d.get("result") or {}).get("bdstoken")
-
-
-def add_task(opener, token, magnet, save_path):
-    q = urllib.parse.urlencode({
-        "method": "add_task", "app_id": "250528", "bdstoken": token,
-        "clienttype": "0", "web": "1", "channel": "chunlei",
-    })
-    body = urllib.parse.urlencode({
-        "method": "add_task", "app_id": "250528",
-        "file_sha1": "", "save_path": save_path,
-        "selected_idx": "", "task_from": "1",
-        "source_url": magnet, "type": "2",
-    }).encode()
-    raw = req(opener, f"https://pan.baidu.com/rest/2.0/services/cloud_dl?{q}",
-                      data=body, referer="https://pan.baidu.com/disk/main")
-    return json.loads(raw)
-
-
-def list_tasks(opener, token):
-    q = urllib.parse.urlencode({
-        "method": "list_task", "app_id": "250528", "bdstoken": token,
-        "clienttype": "0", "web": "1", "channel": "chunlei",
-        "need_task_info": "1", "status_type": "0", "start": "0", "limit": "50",
-    })
-    body = b"start=0&limit=50"
-    raw = req(opener, f"https://pan.baidu.com/rest/2.0/services/cloud_dl?{q}",
-                      data=body, referer="https://pan.baidu.com/disk/main")
-    return json.loads(raw)
-
-
-# ---------- 主流程 ----------
 def today():
     return dt.date.today().isoformat()
 
 
 def emit(status, msg="", **extra):
-    """写出运行状态文件，automation 之后读这个文件向你汇报。"""
-    out = {"status": status, "msg": msg, "date": today(),
-           "time": dt.datetime.now().isoformat(), **extra}
-    json.dump(out, open(RUN_LOG, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    state = {"status": status, "msg": msg, "date": today(),
+             "time": dt.datetime.now().isoformat(timespec="seconds"), **extra}
+    write_json(RUN_LOG, state)
     print(f"[{status}] {msg}", flush=True)
+    return state
+
+
+def task_key(series, ep):
+    return f"{series['mikan_id']}|{series['save_path']}|{Decimal(ep).normalize()}"
+
+
+def retry_failed(mikan_id):
+    with FileLock(RUN_LOCK, timeout=0):
+        history = read_json(HISTORY_FILE, {})
+        keys = [key for key, record in history.items()
+                if record["mikan_id"] == mikan_id and record["state"] in ("FAILED", "REJECTED")]
+        for key in keys:
+            del history[key]
+        write_json(HISTORY_FILE, history)
+        return len(keys)
+
+
+def resolve_unknown(key, action):
+    if action not in ("completed", "retry"):
+        raise ValueError("不支持的处理方式")
+    with FileLock(RUN_LOCK, timeout=0):
+        history = read_json(HISTORY_FILE, {})
+        record = history.get(key)
+        if not record or record["state"] != "UNKNOWN":
+            raise ValueError("这项任务已变化，请刷新列表")
+        if action == "completed":
+            record.update(state="COMPLETED", detail="用户已核验入盘")
+        else:
+            del history[key]
+        write_json(HISTORY_FILE, history)
+
+
+def update_task(record, info):
+    if not info or str(info.get("result", 0)) != "0":
+        record.update(state="UNKNOWN", detail="未查到任务，请核验网盘；为避免重复，暂停自动重提")
+        return
+    status = str(info.get("status", ""))
+    names = [info.get("task_name") or ""] + [
+        item.get("file_name", "") for item in info.get("file_list", [])]
+    record.update(task_status=status, task_name=info.get("task_name"),
+                  detail=TASK_STATUS.get(status, f"未知任务状态 {status}"))
+    if any(name.lower().endswith(".bak") for name in names):
+        record.update(state="FAILED", detail="网盘返回 .bak 文件，可能被过滤，请核验")
+    elif status == "0":
+        record["state"] = "COMPLETED"
+    elif status in ("2", "3", "4", "5", "6", "7", "8"):
+        record["state"] = "FAILED"
+    else:
+        record["state"] = "PENDING"
+
+
+def _current_series(snapshot):
+    current = next((s for s in load_list()["series"] if s["mikan_id"] == snapshot["mikan_id"]), None)
+    if current is None or any(current.get(k) != snapshot.get(k) for k in PREF_KEYS):
+        raise ValueError("追番配置已被修改或删除，请重新检查")
+    return current
+
+
+def _persist_series(snapshot, best, history, status, detail):
+    def merge(cfg):
+        current = next((s for s in cfg["series"] if s["mikan_id"] == snapshot["mikan_id"]), None)
+        if current is None or any(current.get(k) != snapshot.get(k) for k in PREF_KEYS):
+            return
+        cursor = Decimal(str(current.get("last_episode", "0")))
+        # 只越过已确认完成的资源；前面一话失败不能被后面的成功覆盖。
+        episodes = {Decimal(item["ep"]) for item in best}
+        episodes.update(Decimal(record["ep"]) for record in history.values()
+                        if record["mikan_id"] == snapshot["mikan_id"]
+                        and record["save_path"] == snapshot["save_path"])
+        for ep in sorted(episodes):
+            if ep <= cursor:
+                continue
+            if history.get(task_key(snapshot, ep), {}).get("state") != "COMPLETED":
+                break
+            cursor = ep
+        if cursor > Decimal(str(current.get("last_episode", "0"))):
+            current["last_episode"] = str(cursor)
+        current.update(last_check=today(), last_check_status=status, last_check_detail=detail)
+    mutate_list(merge)
+
+
+def _run(client, on_progress):
+    cfg = load_list()
+    history = read_json(HISTORY_FILE, {})
+    if not isinstance(history, dict):
+        raise ValueError("任务记录格式错误，请先检查 .task_history.json")
+    active_ids = {s["mikan_id"] for s in cfg["series"]}
+    tracked = [record for record in history.values()
+               if record["mikan_id"] in active_ids and record["state"] in ("PENDING", "UNKNOWN")
+               and record.get("task_id")]
+    query_error = None
+    if tracked:
+        try:
+            info = client.query_tasks([r["task_id"] for r in tracked])
+            for record in tracked:
+                update_task(record, info.get(str(record["task_id"])))
+            write_json(HISTORY_FILE, history)
+        except LoginRequired:
+            raise
+        except Exception as error:
+            query_error = safe_error(error)
+
+    rows, errors = [], []
+    for series in cfg["series"]:
+        best = []
+        emit("RUNNING", f"正在检查 {series['name']}", submitted=rows)
+        try:
+            items = parse_mikan(fetch_mikan(series["mikan_id"]))
+            if not items:
+                raise ValueError("详情页未解析到资源，请检查代理、页面内容或解析器")
+            best = select_for_series(items, series)
+            newer = [it for it in best if Decimal(it["ep"]) > Decimal(str(series.get("last_episode", "0")))]
+            for item in newer:
+                _current_series(series)
+                key = task_key(series, item["ep"])
+                record = history.get(key)
+                if record is None or (record["state"] == "REJECTED" and record.get("attempts", 0) < 3):
+                    # UNKNOWN 必须先写入；进程中断或响应丢失时，下次不会盲目重复提交。
+                    record = {
+                        "mikan_id": series["mikan_id"], "series": series["name"], "ep": item["ep"],
+                        "name": f"{series['name']} 第{item['ep']}话", "save_path": series["save_path"],
+                        "infohash": item["infohash"], "state": "UNKNOWN",
+                        "detail": "正在提交，结果尚未确认", "time": dt.datetime.now().isoformat(),
+                        "attempts": (record or {}).get("attempts", 0) + 1,
+                    }
+                    history[key] = record
+                    write_json(HISTORY_FILE, history)
+                    try:
+                        result = client.add_task(item["magnet"], series["save_path"])
+                        code = errno(result)
+                        tid = result.get("task_id")
+                        record["errno"] = code
+                        if str(code) == "-6":
+                            record.update(state="REJECTED", detail="登录态失效")
+                            raise LoginRequired("登录态失效，请重新扫码")
+                        if tid and (code is None or str(code) == "0"):
+                            record.update(state="PENDING", task_id=str(tid), detail="已受理，等待网盘回读")
+                        elif code is not None and str(code) != "0":
+                            record.update(state="REJECTED", detail=f"提交被拒绝，错误码 {code}；最多跨运行重试 3 次")
+                        else:
+                            record.update(state="UNKNOWN", detail="响应未包含任务 ID，需人工核验网盘")
+                    except LoginRequired:
+                        write_json(HISTORY_FILE, history)
+                        raise
+                    except Exception as error:
+                        record.update(state="UNKNOWN", detail="提交结果不确定，请核验网盘：" + safe_error(error))
+                    write_json(HISTORY_FILE, history)
+                if on_progress:
+                    on_progress(record.copy())
+                progress = [r.copy() for r in history.values()
+                            if r["mikan_id"] == series["mikan_id"] and r["save_path"] == series["save_path"]
+                            and Decimal(r["ep"]) > Decimal(str(series.get("last_episode", "0")))]
+                emit("RUNNING", f"正在处理 {series['name']} 第{item['ep']}话", submitted=rows + progress)
+
+            records = sorted((record for record in history.values()
+                              if record["mikan_id"] == series["mikan_id"]
+                              and record["save_path"] == series["save_path"]
+                              and Decimal(record["ep"]) > Decimal(str(series.get("last_episode", "0")))),
+                             key=lambda record: Decimal(record["ep"]))
+            pending = [r for r in records if r["state"] == "PENDING" and r.get("task_id")]
+            if pending:
+                try:
+                    info = client.query_tasks([r["task_id"] for r in pending])
+                    for record in pending:
+                        update_task(record, info.get(str(record["task_id"])))
+                except LoginRequired:
+                    raise
+                except Exception as error:
+                    query_error = safe_error(error)
+                    for record in pending:
+                        record["detail"] = "已受理，但任务回读失败：" + query_error
+                write_json(HISTORY_FILE, history)
+            rows.extend(r.copy() for r in records)
+            states = {r["state"] for r in records}
+            status = ("GENERIC" if states & {"REJECTED", "FAILED"} else
+                      "UNKNOWN" if "UNKNOWN" in states else
+                      "PENDING" if "PENDING" in states else
+                      "OK" if records else "NO_UPDATES")
+            detail = f"匹配 {len(best)} 话，本次跟踪 {len(records)} 话"
+            _persist_series(series, best, history, status, detail)
+        except LoginRequired:
+            raise
+        except Exception as error:
+            status = "NET_ERROR" if isinstance(error, NETWORK_ERRORS) else "GENERIC"
+            detail = safe_error(error)
+            errors.append({"series": series["name"], "status": status, "msg": detail})
+            _persist_series(series, [], history, status, detail)
+    if query_error:
+        errors.append({"status": "NET_ERROR", "msg": "任务回读失败：" + query_error})
+    states = {r["state"] for r in rows}
+    status = ("NET_ERROR" if errors and all(e["status"] == "NET_ERROR" for e in errors) else
+              "GENERIC" if errors or states & {"FAILED", "REJECTED"} else
+              "UNKNOWN" if "UNKNOWN" in states else
+              "PENDING" if "PENDING" in states else "OK" if rows else "NO_UPDATES")
+    complete = sum(r["state"] == "COMPLETED" for r in rows)
+    pending = sum(r["state"] == "PENDING" for r in rows)
+    msg = ("无新话" if status == "NO_UPDATES" else
+           f"完成 {complete} 话，等待网盘 {pending} 话，需处理 {len(rows) - complete - pending} 话")
+    if errors:
+        msg += f"；{len(errors)} 项检查失败"
+    return emit(status, msg, submitted=rows, errors=errors)
+
+
+def run(on_progress=None, client=None):
+    try:
+        lock = FileLock(RUN_LOCK, timeout=0)
+        lock.__enter__()
+    except TimeoutError:
+        return {"status": "BUSY", "msg": "已有检查在运行", "submitted": []}
+    try:
+        emit("RUNNING", "正在检查追番列表", submitted=[])
+        # 空列表无需先登录。
+        if not load_list()["series"]:
+            return emit("NO_UPDATES", "追番列表为空", submitted=[])
+        if client is None:
+            client = BaiduClient()
+            client.login_info()
+        return _run(client, on_progress)
+    except LoginRequired as error:
+        return emit("QRCODE_NEEDED", str(error), submitted=[])
+    except NETWORK_ERRORS as error:
+        return emit("NET_ERROR", safe_error(error), submitted=[])
+    except Exception as error:
+        return emit("GENERIC", safe_error(error), submitted=[])
+    finally:
+        lock.__exit__(None, None, None)
 
 
 def main():
-    if not os.path.exists(LIST_FILE):
-        emit("GENERIC", "未找到追番列表")
-        return
-    cfg = json.load(open(LIST_FILE, encoding="utf-8"))
-
-    # 1) 登录态自检
-    if not os.path.exists(COOKIE_FILE):
-        emit("QRCODE_NEEDED", "无缓存登录态，请扫码")
-        return
-    cookies = json.load(open(COOKIE_FILE, encoding="utf-8"))
-    op, _ = baidu_opener(cookies)
-    if not check_login(op):
-        os.remove(COOKIE_FILE)
-        emit("QRCODE_NEEDED", "登录态已失效，请扫码")
-        return
-
-    token = get_bdstoken(op)
-    if not token:
-        emit("QRCODE_NEEDED", "无法获取 bdstoken，登录态可能失效")
-        return
-
-    # 2) 遍历各番剧
-    submitted = []
-    new_episodes_count = 0
-    no_change = True
-    for s in cfg["series"]:
-        print(f"\n--- {s['name']} (#{s['mikan_id']}) ---", flush=True)
-        try:
-            html_txt = fetch_mikan(s["mikan_id"])
-        except Exception as e:
-            print(f"  抓取失败: {e}")
-            continue
-        items = parse_mikan(html_txt)
-        best = select_best(items, s.get("subtitle_groups", []))
-        last_ep = str(s.get("last_episode", "0"))
-        new_items = [i for i in best if i["ep"] != "?" and _ep_gt(i["ep"], last_ep)]
-        if not new_items:
-            print(f"  无新话（已抓至第{last_ep}话）")
-            continue
-        no_change = False
-        for it in new_items:
-            print(f"  新话: 第{it['ep']}话 {it['group']} {it['size']} -> 提交", flush=True)
-            try:
-                r = add_task(op, token, it["magnet"], s["save_path"])
-                errno = r.get("errno")
-                if errno == 0:
-                    submitted.append({"series": s["name"],
-                                       "ep": it["ep"], "group": it["group"],
-                                       "size": it["size"], "errno": 0,
-                                       "task_id": r.get("task_id")})
-                    s["last_episode"] = it["ep"]
-                    new_episodes_count += 1
-                else:
-                    submitted.append({"series": s["name"],
-                                       "ep": it["ep"], "errno": errno,
-                                       "raw": json.dumps(r, ensure_ascii=False)[:200]})
-                    print(f"    提交返回 errno={errno} raw={r}")
-            except Exception as e:
-                submitted.append({"series": s["name"],
-                                   "ep": it["ep"], "errno": "EXC",
-                                   "msg": str(e)})
-                print(f"    异常: {e}")
-            time.sleep(2)
-        s["last_check"] = today()
-
-    # 3) 回读任务状态
-    task_summary = []
-    if submitted:
-        time.sleep(8)
-        try:
-            lt = list_tasks(op, token)
-            info = lt.get("task_info") or {}
-            for s in submitted:
-                tid = s.get("task_id")
-                if tid:
-                    t = info.get(str(tid)) or {}
-                    s["task_status"] = t.get("status")
-                    s["task_name"] = t.get("task_name")
-                    s["task_result"] = (t.get("file_size") or t.get("result"))
-        except Exception as e:
-            print(f"  任务状态读取失败: {e}")
-
-    # 4) 持久化更新后的清单（加锁，避免与 web 并发写冲突）
-    with FileLock(LIST_LOCK, timeout=15):
-        json.dump(cfg, open(LIST_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-
-    # 5) 清理临时件
-    for p in (QR_FILE,):
-        if os.path.exists(p):
-            try: os.remove(p)
-            except Exception: pass
-
-    # 6) 出状态
-    if no_change:
-        emit("NO_UPDATES", "本周无新话", submitted=submitted)
-    else:
-        emit("OK", f"已提交 {new_episodes_count} 条新话磁力", submitted=submitted)
-
-
-def _ep_gt(a, b):
-    """话数比较: a > b"""
-    try:
-        return float(a) > float(b)
-    except Exception:
-        return a > b
+    state = run()
+    return 0 if state["status"] in ("OK", "NO_UPDATES", "PENDING") else 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

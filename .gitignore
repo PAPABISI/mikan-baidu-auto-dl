@@ -1,5 +1,6 @@
 # 敏感凭证（含百度 BDUSS 登录态，绝不能进版本库）
 .baidu_cookies.json
+.baidu_pending_login.json
 baidu_keys.json
 
 # 运行时产物
@@ -8,7 +9,16 @@ login_qr.png
 run_log_*.json
 .qr_state.json
 .qr_login.log
+.qr_diagnostics.json
 static/qr.png
+.task_history.json
+.*.lock
+.tmp-*
+.web_*.log
+.test-*/
+data/library.json
+data/.library.lock
+.agent-*.json
 
 # 浏览器配置副本
 .chrome_copy/

@@ -3,9 +3,13 @@
 web_app.py 和 auto_dl.py 共享同一把锁，避免同时写 追番列表.json。
 锁文件本身是 .list.lock，与数据文件分开。
 """
-import msvcrt
 import os
 import time
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 
 class FileLock:
@@ -17,21 +21,32 @@ class FileLock:
     def __enter__(self):
         os.makedirs(os.path.dirname(self.lock_path) or ".", exist_ok=True)
         # 'a+' 让文件不存在时创建；不会截断已有内容
-        self.fd = open(self.lock_path, "a+")
-        deadline = time.time() + self.timeout
+        self.fd = open(self.lock_path, "a+b")
+        if os.path.getsize(self.lock_path) == 0:
+            self.fd.write(b"\0")
+            self.fd.flush()
+        deadline = time.monotonic() + self.timeout
         while True:
             try:
-                msvcrt.locking(self.fd.fileno(), msvcrt.LK_NBLCK, 1)
+                self.fd.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(self.fd.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return self
             except OSError:
-                if time.time() > deadline:
+                if time.monotonic() >= deadline:
+                    self.fd.close()
                     raise TimeoutError(f"文件锁等待超时: {self.lock_path}")
                 time.sleep(0.1)
 
     def __exit__(self, *exc):
         try:
             self.fd.seek(0)
-            msvcrt.locking(self.fd.fileno(), msvcrt.LK_UNLCK, 1)
+            if os.name == "nt":
+                msvcrt.locking(self.fd.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(self.fd.fileno(), fcntl.LOCK_UN)
         finally:
             self.fd.close()
 

@@ -3,13 +3,49 @@
     {
       "mikan_id": 4059,
       "name": "FX战士久留美",
-      "subtitle_groups": ["绿茶字幕组"],
+      "subtitle_groups": [
+        "绿茶字幕组"
+      ],
       "language": "简体",
       "embedded_only": true,
-      "save_path": "/FX战士久留美",
+      "save_path": "/Anime/FX战士久留美",
       "last_episode": "03",
       "last_check": "2026-10-18",
-      "notes": "绿茶字幕组唯一三话齐全，01有v2修正版"
+      "notes": "简体中文内嵌优先；以蜜柑实时资源与逐话入盘记录为准"
+    },
+    {
+      "mikan_id": 4097,
+      "name": "青之箱 第二季",
+      "subtitle_groups": [
+        "今晚月色真美"
+      ],
+      "language": "简体",
+      "embedded_only": true,
+      "save_path": "/Anime/青之箱 第二季",
+      "last_episode": "0",
+      "last_check": null,
+      "last_check_status": null,
+      "last_check_detail": null,
+      "cover_url": "https://mikanani.me/images/Bangumi/202610/730cf083.jpg?width=400&height=400&format=webp",
+      "notes": "",
+      "added_at": "2026-10-30"
+    },
+    {
+      "mikan_id": 4064,
+      "name": "学生会也有洞！",
+      "subtitle_groups": [
+        "悠哈璃羽字幕社"
+      ],
+      "language": "简体",
+      "embedded_only": true,
+      "save_path": "/Anime/学生会也有洞！",
+      "last_episode": "0",
+      "last_check": null,
+      "last_check_status": null,
+      "last_check_detail": null,
+      "cover_url": "https://mikanani.me/images/Bangumi/202610/3de10b95.jpg?width=400&height=400&format=webp",
+      "notes": "",
+      "added_at": "2026-10-30"
     }
   ]
 }
