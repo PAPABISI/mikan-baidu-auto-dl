@@ -507,7 +507,7 @@ class QRTests(TemporaryProject):
         self.assertNotIn("secret-bduss", str(caught.exception))
 
 
-class HTTPTests(TemporaryProject):
+class HTTPFixture(TemporaryProject):
     def setUp(self):
         super().setUp()
         self.server = web_app.ThreadingHTTPServer(("127.0.0.1", 0), web_app.Handler)
@@ -533,6 +533,7 @@ class HTTPTests(TemporaryProject):
             raw = response.read()
             return response.status, json.loads(raw) if "application/json" in response.headers.get("Content-Type", "") else raw
 
+class HTTPTests(HTTPFixture):
     def test_crud_validation_and_duplicate_guard(self):
         self.assertEqual(self.request("/api/series")[0], 200)
         self.assertEqual(self.request("/api/series", "POST", series())[0], 400)

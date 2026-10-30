@@ -39,6 +39,8 @@ def normalize_subject(data):
         "broadcast_source": f"https://bgm.tv/subject/{data['id']}",
         "broadcast_note": "Bangumi 条目的放送星期，字幕资源发布时间可能不同",
         "score": (data.get("rating") or {}).get("score"),
+        "score_votes": (data.get("rating") or {}).get("total", 0),
+        "rank": (data.get("rating") or {}).get("rank"), "platform": data.get("platform", ""),
         "studio": info.get("动画制作", ""), "official_url": info.get("官方网站", ""),
         "metadata_updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }

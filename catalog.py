@@ -10,6 +10,7 @@ from decimal import Decimal
 
 import storage
 from filelock import FileLock
+from parse_mikan import resolution_of, subtitle_kind, select_for_series
 
 DATA_FILE = os.path.join(storage.BASE, "data", "library.json")
 DATA_LOCK = os.path.join(storage.BASE, "data", ".library.lock")
@@ -54,7 +55,8 @@ def save_metadata(mikan_id, values):
     allowed = {"bangumi_id", "name_original", "name_cn", "summary", "cover_url", "total_episodes", "air_date",
                "broadcast_weekday", "broadcast_source", "broadcast_note", "broadcast_time", "broadcast_timezone",
                "release_weekdays", "release_note", "release_samples", "score", "studio", "official_url",
-               "metadata_updated_at", "last_scan", "last_scan_error", "available_episodes", "folder_verified_at"}
+               "metadata_updated_at", "last_scan", "last_scan_error", "available_episodes", "folder_verified_at",
+               "score_votes", "rank", "platform"}
     if not isinstance(values, dict):
         raise ValueError("番剧资料必须是对象")
     if any(key not in allowed for key in values):
@@ -94,6 +96,8 @@ def watch_series(mikan_id, name, subtitle_groups=None, **fields):
     item = {"mikan_id": mikan_id, "name": name, "subtitle_groups": subtitle_groups or [],
             "language": "简体", "embedded_only": True, "save_path": target_path(name),
             "last_episode": "0", **fields}
+    if "subtitle_type" in fields:
+        item["embedded_only"] = fields["subtitle_type"] == "内嵌"
     storage.validate_series(item)
     check_target(item["save_path"])
     def update(cfg):
@@ -113,6 +117,17 @@ def enqueue(series, items):
     check_target(series["save_path"])
     def update(data):
         added = []
+        for job in data["jobs"].values():
+            if job["mikan_id"] != series["mikan_id"] or job["state"] != "READY":
+                continue
+            candidate = {"ep": job["episode"], "ver": job.get("version", 1), "group": job["subtitle_group"],
+                         "lang": job["language"], "embedded": job["embedded"], "title": job["title"],
+                         "soft": job.get("subtitle_type") in ("外挂", "内封") or bool(re.search(r"外挂|外掛|字幕文件|軟字幕|软字幕|内封|內封", job["title"])),
+                         "sealed": job.get("subtitle_type") == "内封" or bool(re.search(r"内封|內封", job["title"])),
+                         "resolution": job.get("resolution", resolution_of(job["title"])), "infohash": job["infohash"]}
+            if job["save_path"] != series["save_path"] or not select_for_series([candidate], series):
+                job.update(state="SUPERSEDED", updated_at=now())
+                event(data, "SUPERSEDED", "追番偏好已变更，旧待添加资源不再匹配；未提交网盘", series["mikan_id"], job["id"])
         for item in items:
             if item.get("ep") == "?":
                 continue
@@ -123,16 +138,25 @@ def enqueue(series, items):
                 continue
             identity = f"{series['mikan_id']}|{series['save_path']}|{item['infohash']}"
             jid = hashlib.sha256(identity.encode()).hexdigest()[:24]
-            if jid in data["jobs"]:
+            existing = data["jobs"].get(jid)
+            if existing and existing["state"] != "SUPERSEDED":
                 continue
             for old in same:
                 if old["state"] == "READY":
                     old.update(state="SUPERSEDED", updated_at=now())
                     event(data, "SUPERSEDED", "已由更合适的资源替代", series["mikan_id"], old["id"])
+            if existing:
+                existing.update(state="READY", updated_at=now())
+                existing.pop("claim_token", None)
+                existing.pop("lease_until", None)
+                event(data, "READY", "偏好重新匹配，恢复该话待添加资源", series["mikan_id"], jid)
+                added.append(copy.deepcopy(existing))
+                continue
             job = {"id": jid, "mikan_id": series["mikan_id"], "series_name": series["name"],
                    "episode": item["ep"], "version": item.get("ver", 1), "title": item["title"],
                    "subtitle_group": item["group"], "language": item.get("lang"),
                    "embedded": bool(item.get("embedded")), "size": item.get("size"),
+                   "subtitle_type": subtitle_kind(item), "resolution": item.get("resolution", resolution_of(item["title"])),
                    "release_date": item.get("date"), "infohash": item["infohash"],
                    "magnet": "magnet:?xt=urn:btih:" + item["infohash"], "save_path": series["save_path"],
                    "source_url": f"https://mikanani.me/Home/Bangumi/{series['mikan_id']}",
@@ -234,7 +258,9 @@ def observe(job_id, state, evidence, source):
 
 
 def public_job(job):
-    return {key: copy.deepcopy(value) for key, value in job.items() if key not in ("claim_token", "lease_until")}
+    result = {key: copy.deepcopy(value) for key, value in job.items() if key not in ("claim_token", "lease_until")}
+    result.setdefault("resolution", resolution_of(job["title"]))
+    return result
 
 
 def retry(job_id, evidence):

@@ -8,6 +8,24 @@ from decimal import Decimal
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlsplit
 
+RESOLUTIONS = ("不限", "2160p", "1440p", "1080p", "720p", "480p", "未知")
+
+
+def resolution_of(title):
+    match = re.search(r"(?<!\d)(2160|1440|1080|720|480)[pPiI](?!\d)", title)
+    if match:
+        return match.group(1) + "p"
+    if re.search(r"\b(?:4K|UHD)\b|3840\s*[x×]\s*2160", title, re.I):
+        return "2160p"
+    for width, height in ((1920, 1080), (1280, 720), (2560, 1440)):
+        if re.search(fr"{width}\s*[x×]\s*{height}", title, re.I):
+            return str(height) + "p"
+    return "未知"
+
+
+def subtitle_kind(item):
+    return "内嵌" if item.get("embedded") and not item.get("soft") else "内封" if item.get("sealed") else "外挂" if item.get("soft") else "其他"
+
 
 def episode_info(title):
     """只返回普通单话；合集、SP/OVA/总集篇留给人工处理。"""
@@ -94,15 +112,17 @@ def parse_mikan(html_txt):
         text = " ".join(row["text"])
         size = re.search(r"\b[\d.]+\s*[KMGT]i?B\b", text, re.I)
         date = re.search(r"\d{4}[/\-]\d{2}[/\-]\d{2}\s+\d{2}:\d{2}", text)
-        chs = bool(re.search(r"简体|简日|简中|简繁|(?<![A-Za-z])(?:CHS|GB(?:_CN)?)(?![A-Za-z])", title, re.I))
-        cht = bool(re.search(r"繁体|繁日|繁中|简繁|(?<![A-Za-z])(?:CHT|BIG5)(?![A-Za-z])", title, re.I))
+        chs = bool(re.search(r"[简簡][体體日中繁]|(?<![A-Za-z])(?:CHS|GB(?:_CN)?)(?![A-Za-z])", title, re.I))
+        cht = bool(re.search(r"繁[体體日中]|[简簡]繁|(?<![A-Za-z])(?:CHT|BIG5)(?![A-Za-z])", title, re.I))
         ep, ver = episode_info(title)
         items.append({
             "title": title, "magnet": magnet, "infohash": infohash,
             "size": size.group() if size else "", "date": date.group() if date else "",
             "torrent": row["torrent"], "group": subgroup(title),
-            "embedded": "内嵌" in title or "硬字幕" in title,
-            "soft": any(word in title for word in ("外挂", "字幕文件", "軟字幕")),
+            "embedded": any(word in title for word in ("内嵌", "內嵌", "硬字幕")),
+            "soft": any(word in title for word in ("外挂", "外掛", "字幕文件", "軟字幕", "软字幕", "内封", "內封")),
+            "sealed": "内封" in title or "內封" in title,
+            "resolution": resolution_of(title),
             "chs": chs, "cht": cht, "ep": ep, "ver": ver,
             "lang": "简繁" if chs and cht else "简体" if chs else "繁体" if cht else "未知",
         })
@@ -126,10 +146,15 @@ def select_best(items, preferred_groups=()):
 
 def select_for_series(items, series):
     lang = series.get("language", "简体")
+    kind = series.get("subtitle_type", "内嵌" if series.get("embedded_only", True) else "不限")
+    resolution = series.get("resolution", "不限")
+    groups = series.get("subtitle_groups", [])
     filtered = [it for it in items
                 if (lang == "不限" or it["lang"] == lang)
-                and (not series.get("embedded_only", True) or (it["embedded"] and not it["soft"]))]
-    return select_best(filtered, series.get("subtitle_groups", []))
+                and (kind == "不限" or subtitle_kind(it) == kind)
+                and (resolution == "不限" or it.get("resolution", resolution_of(it["title"])) == resolution)
+                and (not series.get("strict_groups") or not groups or it["group"] in groups)]
+    return select_best(filtered, groups)
 
 
 if __name__ == "__main__":

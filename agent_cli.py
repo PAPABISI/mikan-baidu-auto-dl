@@ -23,6 +23,10 @@ def main(argv=None):
     watch.add_argument("--group", action="append", default=[])
     watch.add_argument("--bangumi-id", type=int)
     watch.add_argument("--path")
+    watch.add_argument("--language", choices=("简体", "繁体", "简繁", "不限"))
+    watch.add_argument("--subtitle-type", choices=("内嵌", "外挂", "内封", "不限"))
+    watch.add_argument("--resolution", choices=("不限", "2160p", "1440p", "1080p", "720p", "480p", "未知"))
+    watch.add_argument("--only-group", action="store_true")
     prepare = commands.add_parser("prepare", help="抓取并生成待添加清单，不操作网盘")
     prepare.add_argument("--mikan-id", type=int)
     queue = commands.add_parser("queue", help="读取队列；默认返回所有需执行或核验的任务")
@@ -54,6 +58,11 @@ def main(argv=None):
                     result["bangumi_error"] = safe_error(error)
         elif args.command == "watch":
             fields = {"save_path": args.path} if args.path else {}
+            for field in ("language", "subtitle_type", "resolution"):
+                if getattr(args, field) is not None:
+                    fields[field] = getattr(args, field)
+            if args.only_group:
+                fields["strict_groups"] = True
             result = catalog.watch_series(args.mikan_id, args.name, args.group, **fields)
             if args.bangumi_id:
                 catalog.save_metadata(args.mikan_id, metadata.get_subject(args.bangumi_id))

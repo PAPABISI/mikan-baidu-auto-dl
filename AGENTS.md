@@ -12,6 +12,7 @@
 - 默认保存 `/Anime/<番名>/`，每部番剧一个子目录。绝不误存到根目录，也不删除用户文件。
 - 优先简体中文内嵌；“简日内嵌”符合简体要求。资源不满足偏好时保留待确认，不擅自改成繁体或外挂。
 - 字幕组按配置顺序优先；同话同组选择最高修订版。已受理、下载中或已入盘的同话不因发现新 hash 而自动重下。
+- 新增偏好字段：`subtitle_type`（内嵌/外挂/内封/不限）、`resolution`（2160p/1440p/1080p/720p/480p/未知/不限）、`strict_groups`。启用 strict_groups 时仅用配置中的字幕组；旧配置兼容 embedded_only，默认不限清晰度。准备阶段会停用不符合新偏好的未提交资源，不能因此修改已受理或已完成记录。
 - 日常巡检时间：北京时间每天 10:00。巡检未发现可操作变化时保持安静；登录失效、失败、新增提交或入盘变化才通知。
 
 ## 搜索与准备
@@ -61,6 +62,7 @@ report 从 stdin 或 UTF-8 JSON 文件读取：
 
 - `data/library.json` 是唯一下载记录库；通过 `catalog.py` / CLI / HTTP 修改，写入已使用文件锁和原子替换。
 - `python agent_cli.py library` 可导出；Web 的“操作历史”可查看并导出。每次 report 即刷新 Web 数据。
+- Web 的“季度新番”仅浏览 Bangumi 公开资料与评分，可按年份/季度/关键词分页读取 `/api/bangumi/season`。评分人数与缓存时间一起展示；此入口不会新增追番或操作网盘，仍需由用户确认蜜柑条目及字幕偏好后保存。
 - HTTP：GET `/api/library`、GET `/api/agent/queue`、POST `/api/agent/claim`、POST `/api/agent/report`、POST `/api/agent/review`，写请求用 JSON。
 - 所有常见 Agent 只要支持 Python/本地 HTTP 与浏览器 UI 都可遵循本协议。不能访问同一工作区或浏览器的云端 Agent 不能直接执行本地任务，不应声称兼容即等于自动共享会话。
 - 代码改动后运行 `python -m unittest discover -s tests -v` 与 `node --check static/app.js`。测试必须使用临时库和模拟远端，不得往真实网盘提交测试任务。

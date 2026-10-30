@@ -17,6 +17,7 @@ static/qr.png
 .web_*.log
 .test-*/
 data/library.json
+data/season-cache.json
 data/.library.lock
 .agent-*.json
 

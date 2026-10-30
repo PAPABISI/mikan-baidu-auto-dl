@@ -19,9 +19,10 @@ import auto_dl
 import agent_bridge
 import catalog
 import metadata
+import season
 import storage
 from baidu import BaiduClient, LoginRequired, NETWORK_ERRORS, make_opener, req, safe_error
-from parse_mikan import parse_mikan
+from parse_mikan import parse_mikan, subtitle_kind
 from qr_cloud_dl import ensure_login
 
 BASE = storage.BASE
@@ -156,13 +157,16 @@ def mikan_bangumi(bid):
     if not items:
         raise ValueError("未解析到资源，请检查蜜柑页面或代理")
     groups = collections.defaultdict(set)
+    samples = {}
     for item in items:
-        kind = "内嵌" if item["embedded"] and not item["soft"] else "外挂" if item["soft"] else "其他"
+        kind = subtitle_kind(item)
         if item["ep"] != "?":
-            groups[(item["group"], item["lang"], kind)].add(item["ep"])
-    return [{"group": group, "language": lang, "type": kind, "count": len(eps),
-             "episodes": sorted(eps, key=float)}
-            for (group, lang, kind), eps in sorted(groups.items())]
+            key = (item["group"], item["lang"], kind, item["resolution"])
+            groups[key].add(item["ep"])
+            samples.setdefault(key, item["title"])
+    return [{"group": group, "language": lang, "type": kind, "resolution": resolution,
+             "count": len(eps), "episodes": sorted(eps, key=float), "sample": samples[(group, lang, kind, resolution)]}
+            for (group, lang, kind, resolution), eps in sorted(groups.items())]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -250,6 +254,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not term:
                     raise ValueError("请输入番名")
                 return self._send(200, {"results": metadata.search_bangumi(term)})
+            if path == "/api/bangumi/season":
+                year, quarter = season.current_season()
+                return self._send(200, season.browse(
+                    year=int(query.get("year", [str(year)])[0]), quarter=int(query.get("quarter", [str(quarter)])[0]),
+                    page=int(query.get("page", ["1"])[0]), sort=query.get("sort", ["score"])[0],
+                    query=query.get("q", [""])[0], refresh=query.get("refresh") == ["1"]))
             if path == "/api/agent/guide":
                 with open(os.path.join(BASE, "AGENTS.md"), encoding="utf-8") as stream:
                     return self._send(200, stream.read(), "text/plain; charset=utf-8")
@@ -339,9 +349,13 @@ class Handler(BaseHTTPRequestHandler):
                 if method == "DELETE":
                     cfg["series"].pop(index)
                     return {"ok": True, "removed": item["name"]}
-                for key in ("subtitle_groups", "language", "embedded_only", "save_path", "notes", "cover_url"):
+                for key in ("subtitle_groups", "language", "embedded_only", "subtitle_type", "resolution", "strict_groups", "save_path", "notes", "cover_url"):
                     if key in body:
                         item[key] = body[key]
+                if "subtitle_type" in body:
+                    item["embedded_only"] = body["subtitle_type"] == "内嵌"
+                elif "embedded_only" in body:
+                    item["subtitle_type"] = "内嵌" if body["embedded_only"] else "不限"
                 storage.validate_series(item)
                 catalog.check_target(item["save_path"])
                 return {"ok": True, "series": item}
@@ -359,6 +373,11 @@ class Handler(BaseHTTPRequestHandler):
             "cover_url": body.get("cover_url"), "notes": body.get("notes", ""),
             "added_at": dt.date.today().isoformat(),
         }
+        for key in ("subtitle_type", "resolution", "strict_groups"):
+            if key in body:
+                item[key] = body[key]
+        if "subtitle_type" in body:
+            item["embedded_only"] = body["subtitle_type"] == "内嵌"
         storage.validate_series(item)
         catalog.check_target(item["save_path"])
         def add(cfg):

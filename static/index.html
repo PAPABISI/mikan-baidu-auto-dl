@@ -6,6 +6,7 @@
 <title>蜜柑片架 · 我的追番记录</title>
 <link rel="stylesheet" href="/static/library.css">
 <script src="/static/app.js" defer></script>
+<script src="/static/season.js" defer></script>
 </head>
 <body>
 <aside class="sidebar">
@@ -14,6 +15,7 @@
   <nav aria-label="主导航">
     <button data-view="library" class="active"><span>▦</span> 番剧片库 <b id="nav-count">0</b></button>
     <button data-view="calendar"><span>▤</span> 每周更新</button>
+    <button data-view="season"><span>✦</span> 季度新番</button>
     <button data-view="history"><span>↺</span> 操作历史</button>
   </nav>
   <div class="side-note"><i></i><strong>官方网页添加</strong><p>由 Agent 操作百度网盘<br>每次添加，留下一条记录</p></div>
@@ -38,10 +40,24 @@
     <div id="empty" class="empty" hidden><div>◒</div><h2>片架还是空的</h2><p>添加想追的番剧，或让 AI 从蜜柑帮你寻找资源。</p><button class="button primary" id="empty-add">添加第一部番剧</button></div>
   </section>
   <section id="view-calendar" hidden><div class="section-bar"><div><h2>每周更新</h2><p>放送日来自资料站；字幕发布时间可能晚于放送。</p></div></div><div id="calendar" class="calendar"></div></section>
+  <section id="view-season" hidden>
+    <div class="season-intro"><div><span class="eyebrow">DISCOVER / BANGUMI</span><h2>下一部想追的番，从这里开始。</h2><p>按季度浏览动画与评分，找到喜欢的作品后再挑选字幕资源。</p></div><a href="https://bgm.tv" target="_blank" rel="noopener">数据来自 Bangumi ↗</a></div>
+    <form id="season-controls" class="season-controls">
+      <label>年份<input id="season-year" type="number" min="1900" max="2100" required aria-label="新番年份"></label>
+      <label>季度<select id="season-quarter" aria-label="新番季度"><option value="1">冬季 · 1–3月</option><option value="2">春季 · 4–6月</option><option value="3">夏季 · 7–9月</option><option value="4">秋季 · 10–12月</option></select></label>
+      <label>排序<select id="season-sort" aria-label="新番排序"><option value="heat">热度优先</option><option value="score">评分从高到低</option><option value="rank">Bangumi 排名</option></select></label>
+      <label class="season-query">片名<input id="season-query" placeholder="在本季度搜索片名…" maxlength="100"></label>
+      <button id="season-submit" class="button primary">浏览新番</button><button id="season-reload" type="button" class="button quiet">刷新评分</button>
+    </form>
+    <div id="season-info" class="season-info" role="status">选择季度，开始浏览。</div><p id="season-scope" class="muted"></p>
+    <div id="season-grid" class="season-grid"></div>
+    <div class="season-pagination"><button id="season-prev" class="button quiet" disabled>← 上一页</button><span id="season-page"></span><button id="season-next" class="button quiet" disabled>下一页 →</button></div>
+  </section>
   <section id="view-history" hidden><div class="section-bar"><div><h2>每一次操作，都有记录</h2><p>发现资源、提交网盘与最终入盘，分开记录。</p></div><button id="export" class="button quiet">↓ 导出记录</button></div><div id="history" class="history"></div></section>
   <footer><span>蜜柑发现资源 · Bangumi 补充资料 · 百度网盘保存</span><span id="footer-status">本地数据 · 持久保存</span></footer>
 </main>
 <dialog id="detail-dialog"><div id="detail-content"></div></dialog>
+<dialog id="season-detail-dialog"><div id="season-detail-content"></div></dialog>
 <dialog id="observe-dialog">
   <div class="dialog-head"><div><span class="eyebrow">MANUAL RECORD</span><h2>记录手动添加结果</h2></div><button id="close-observe" class="icon-button" aria-label="关闭记录窗口">×</button></div>
   <p id="observe-title"></p><p class="muted">请根据官网的实际结果记录。网盘受理后仍需等待完成，不能直接视为入盘。</p>
@@ -57,13 +73,16 @@
   <form id="watch-form" hidden>
     <div class="selected-title" id="selected-title"></div>
     <div class="form-grid">
-      <label>字幕组优先级<input id="groups" placeholder="逗号分隔，空白表示不限"></label>
+      <label>字幕组<select id="groups"><option value="">不限字幕组</option></select></label>
       <label>字幕语言<select id="language"><option>简体</option><option>简繁</option><option>繁体</option><option>不限</option></select></label>
-      <label>字幕形式<select id="embedded"><option value="true">仅内嵌</option><option value="false">允许外挂</option></select></label>
+      <label>字幕形式<select id="embedded"><option value="内嵌">仅内嵌</option><option value="外挂">仅外挂</option><option value="内封">仅内封（软字幕）</option><option value="不限">不限（允许软字幕）</option></select></label>
+      <label>清晰度<select id="resolution"><option value="不限">不限清晰度</option><option>2160p</option><option>1440p</option><option>1080p</option><option>720p</option><option>480p</option><option value="未知">未标记清晰度</option></select></label>
       <label>保存目录<input id="save-path" placeholder="/Anime/番剧名称" required></label>
     </div>
+    <label class="strict-group"><input id="strict-group" type="checkbox" checked> 仅使用所选字幕组</label><p id="group-priority-note" class="muted"></p>
+    <div class="variant-panel"><div class="variant-heading"><strong>这个字幕组的资源版本</strong><button id="reload-variants" type="button" class="text-button">重新读取</button></div><p id="variant-status" class="muted">选择番剧后读取可用字幕。</p><div id="variant-options" class="variant-options"></div><p id="variant-preview" class="muted"></p></div>
     <div class="metadata-picker"><div><strong>关联 Bangumi 资料</strong><small>补全封面、简介、总话数和每周放送日</small></div><button type="button" id="lookup-bangumi" class="button quiet">查找资料</button></div>
-    <div id="bangumi-results" class="bangumi-results"></div><p id="metadata-selected" class="muted"></p>
+    <div id="bangumi-results" class="bangumi-results"></div><p id="metadata-selected" class="muted"></p><button type="button" id="clear-bangumi" class="text-button" hidden>取消资料关联</button>
     <div class="form-actions"><span class="muted">保存后可点击“检查新集”准备待添加清单。</span><button id="save" class="button primary" type="submit">保存追番</button></div>
   </form>
 </dialog>

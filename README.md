@@ -29,9 +29,13 @@ Web 提供：
 - 每话资源标题、磁力、保存目录、状态与具体证据。
 - 按时间排列的操作历史，以及 JSON 导出。
 - 搜索蜜柑、关联 Bangumi、编辑追番偏好、重试明确失败的任务。
+- 新增与编辑追番均可下拉选择字幕组，再选择简体/繁体/简繁、内嵌/外挂/内封及清晰度；版本按钮显示可用话数，并可一键填入这些条件。
+- “季度新番”可选择年份、季度，按热度/评分/排名浏览 Bangumi 公开动画，显示评分人数、简介与首播日期，支持分页、季度内搜索和从条目转到蜜柑找资源。
 - “记录手动结果”：先在官网操作，再选择实际结果并填写文件名、目录或任务提示；这类记录标明“用户确认”。受理和完成要分别记录。
 
 每次 Agent 回报或手动保存后立即写入数据，页面约 5 秒内刷新。Web 不展示或导出百度凭据。
+
+季度按北京时间当前年月默认选择，冬/春/夏/秋分别对应 1–3/4–6/7–9/10–12 月；筛选的是首播或发行日期，因此包含 TV、WEB、剧场版及 OVA，不包含上季首播后本季续播的作品，也不能列出 Bangumi 未公开的条目。每页 20 条，翻页可浏览后续结果；评分人数为 0 时显示“暂无评分”。公开数据缓存 30 分钟，“刷新评分”可主动更新，远端失败时有缓存会明确标为旧数据。[Bangumi 官方 API 定义](https://github.com/bangumi/api/blob/master/open-api/v0.yaml)。
 
 ## 网络与目录
 
@@ -54,6 +58,8 @@ $env:BANGUMI_PROXY = 'http://127.0.0.1:7897'
 python agent_cli.py search 'FX战士久留美' --source mikan
 python agent_cli.py search 'FX战士久留美' --source bangumi
 python agent_cli.py watch --mikan-id 4059 --name 'FX战士久留美' --group '绿茶字幕组' --bangumi-id 622288
+# 明确限定字幕组、字幕形式和清晰度
+python agent_cli.py watch --mikan-id 4059 --name 'FX战士久留美' --group '绿茶字幕组' --language '简体' --subtitle-type '内嵌' --resolution 1080p --only-group
 python agent_cli.py prepare
 python agent_cli.py queue
 python agent_cli.py library
@@ -104,6 +110,8 @@ observe 用于真实存在的文件或人工添加结果，不声称 Agent 执�
 
 筛选优先简体内嵌，“简日内嵌”符合；“简繁”不自动等同于“简体”。字幕组按配置顺序优先，同组同话选择最高修订版。合集、SP、OVA、特别篇不自动入队。旧历史游标仅保留，不作为新库确认结果。
 
+新配置可使用 `subtitle_type`（内嵌/外挂/内封/不限）、`resolution`（2160p/1440p/1080p/720p/480p/未知/不限）及 `strict_groups`。勾选“仅使用所选字幕组”时不能用其他组补齐；取消后字幕组作为优先级。旧配置仍按 `embedded_only` 解释字幕形式，默认不限清晰度。修改偏好后，下次成功检查会将不再匹配的 READY 资源标为 SUPERSEDED；已受理或已入盘记录不重写、不自动重下。没有匹配资源时可以保存偏好等待更新。
+
 ## 定时任务
 
 本轮选择：北京时间每天 10:00，在当前聊天继续巡检。已有应用调度，无需另建 Windows 计划任务。首次验证发现的浏览器阻碍已经写入执行状态，存在时保持资源检查模式；不能把“每天检查”描述为“每天已自动下载”。
@@ -131,6 +139,7 @@ observe 用于真实存在的文件或人工添加结果，不声称 Agent 执�
 | GET /api/mikan/search?q= | 蜜柑搜索 |
 | GET /api/mikan/bangumi/{id} | 字幕组与资源分布 |
 | GET /api/bangumi/search?q= | 仅动画条目搜索 |
+| GET /api/bangumi/season?year=2026&quarter=4&page=1&sort=heat&q= | 季度公开动画分页与评分，sort 支持 heat/score/rank，refresh=1 强制更新 |
 | POST /api/metadata/{mikan_id} | 资料更新，或 body: bangumi_id |
 | GET/POST /api/series | 获取/新增追番 |
 | PUT/DELETE /api/series/{index} | 编辑/移除配置，附 mikan_id 校验 |
@@ -151,6 +160,7 @@ observe 用于真实存在的文件或人工添加结果，不声称 Agent 执�
 - `catalog.py`：任务、领取、状态转换、事件事务。
 - `agent_bridge.py` / `agent_cli.py`：准备资源与跨 Agent JSON 协议。
 - `metadata.py` / `parse_mikan.py`：Bangumi 资料与蜜柑解析。
+- `season.py` / `static/season.js`：季度新番浏览；公开资料缓存为 `data/season-cache.json`，不进入 Git，不替代真实入盘记录库。
 - `web_app.py` / `static/`：本地 Web。
 - `auto_dl.py`、`baidu.py`、`qr_cloud_dl.py`：保留早期接口实验与回归测试。**不要用旧入口执行当前追番**；旧 `.task_history.json` 与 Cookie 缓存不代表新库已入盘。
 

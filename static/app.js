@@ -8,6 +8,7 @@ let selectedId = null, draft = null, editingIndex = null, chosenBangumi = null, 
 let pollTimer = null, toastTimer = null, fetching = false;
 let observationJob = null;
 let renderedData = '';
+let activeView = 'library', availableVariants = [], preferredGroups = [], suggestedBangumi = null;
 
 async function api(path, method='GET', body=null) {
   const response = await fetch(path,{method,headers:{'Content-Type':'application/json'},
@@ -43,12 +44,16 @@ function titleFor(sid) {
   return library.series.find(s => s.mikan_id === sid)?.name || library.jobs.find(j => j.mikan_id === sid)?.series_name || ('蜜柑 #' + sid);
 }
 function switchView(name) {
-  for (const view of ['library','calendar','history']) $('#view-' + view).hidden = view !== name;
+  activeView = name;
+  for (const view of ['library','calendar','season','history']) $('#view-' + view).hidden = view !== name;
+  $('.stats').hidden = name === 'season'; $('#scan-banner').hidden = name === 'season'; $('#refresh').hidden = name === 'season';
+  $('#executor-banner').hidden = name === 'season' || library.executor?.status !== 'BLOCKED';
   $$('nav button').forEach(button => button.classList.toggle('active',button.dataset.view === name));
-  const titles = {library:'追番片库',calendar:'每周更新',history:'操作历史'};
-  const subtitles = {library:'新集、字幕组和入盘记录，都在这里。',calendar:'看清放送时间，也留意字幕组的发布节奏。',history:'每次添加后更新，把结果留在片架里。'};
+  const titles = {library:'追番片库',calendar:'每周更新',season:'季度新番',history:'操作历史'};
+  const subtitles = {library:'新集、字幕组和入盘记录，都在这里。',calendar:'看清放送时间，也留意字幕组的发布节奏。',season:'从 Bangumi 发现新番，再到蜜柑挑选喜欢的字幕。',history:'每次添加后更新，把结果留在片架里。'};
   $('#page-title').innerHTML = esc(titles[name]) + '<span class="dot">.</span>';
   $('#page-subtitle').textContent = subtitles[name];
+  if (name === 'season') loadSeasonOnce();
 }
 function render() {
   const stats = library.stats || {};
@@ -60,7 +65,7 @@ function render() {
   $('#library-count').textContent = library.series.length;
   const schedule = library.scheduler || {};
   $('#schedule-label').textContent = schedule.status === 'ACTIVE' ? '每天 10:00 · ' + (schedule.mode === 'prepare-only' ? '检查资源' : '已启用') : '尚未启用';
-  $('#executor-banner').hidden = library.executor?.status !== 'BLOCKED';
+  $('#executor-banner').hidden = activeView === 'season' || library.executor?.status !== 'BLOCKED';
   $('#executor-banner').textContent = library.executor?.message || '';
   $('#footer-status').textContent = '本地数据 · ' + dateText(library.updated_at,true) + ' 同步';
   const today = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}).format(new Date());
@@ -71,6 +76,7 @@ function render() {
     renderCalendar();
     renderHistory();
     if ($('#detail-dialog').open && selectedId) renderDetail();
+    if (activeView === 'season' && typeof renderSeason === 'function') renderSeason();
   }
 }
 function renderCards() {
@@ -130,7 +136,8 @@ function renderDetail() {
     '<div class="dialog-head"><span class="eyebrow">ANIME / ' + s.mikan_id + '</span><button class="icon-button" data-action="close-detail" aria-label="关闭详情">×</button></div>' +
     '<div class="detail-hero">' + (image ? '<img src="' + esc(image) + '" alt="番剧封面">' : '<div class="poster-placeholder">◒</div>') +
     '<div><h2>' + esc(s.name) + '</h2><p class="original-name">' + esc(s.name_original || '') + '</p><div class="chips"><span class="chip orange">' +
-    esc(s.language) + (s.embedded_only !== false ? '内嵌' : '') + '</span><span class="chip">' + esc((s.subtitle_groups || []).join(' / ') || '不限字幕组') +
+    esc(s.language) + esc(s.subtitle_type || (s.embedded_only !== false ? '内嵌' : '')) + '</span><span class="chip">' + esc((s.subtitle_groups || []).join(' / ') || '不限字幕组') +
+    '</span><span class="chip">' + esc(s.resolution || '不限清晰度') + (s.strict_groups ? ' · 固定字幕组' : '') +
     '</span><span class="chip">共 ' + esc(s.total_episodes || '待核实') + ' 话</span></div><p class="detail-summary">' + esc(s.summary || '尚未关联番剧简介。可在编辑追番时关联 Bangumi 资料。') +
     '</p></div></div><div class="detail-info"><span class="chip">' + (s.broadcast_weekday ? '每' + esc(days[s.broadcast_weekday]) + '放送' : '放送日待核实') +
     (s.broadcast_time ? ' · ' + esc(s.broadcast_time) + ' ' + esc(s.broadcast_timezone || '') : '') + '</span><span class="chip">' +
@@ -141,7 +148,7 @@ function renderDetail() {
     '<div class="detail-path"><span>保存目录 <code>' + esc(s.save_path) + '</code></span><button class="text-button" data-action="copy-path">复制</button></div>' +
     '<div class="table-wrap"><table class="job-table"><thead><tr><th>话数</th><th>字幕组 / 资源</th><th>状态与证据</th><th>操作</th></tr></thead><tbody>' +
     jobs.map(j => '<tr><td><b>' + esc(j.episode) + '</b>' + (j.version > 1 ? '<div class="muted">v' + j.version + '</div>' : '') +
-      '</td><td>' + esc(j.subtitle_group) + '<div class="muted">' + esc(j.language) + (j.embedded ? '内嵌' : '') + ' · ' + esc(j.size || '') +
+      '</td><td>' + esc(j.subtitle_group) + '<div class="muted">' + esc(j.language) + esc(j.subtitle_type || (j.embedded ? '内嵌' : '')) + ' · ' + esc(j.resolution || '未知') + ' · ' + esc(j.size || '') +
       '</div><details><summary class="muted">资源标题</summary><p>' + esc(j.title) + '</p></details></td><td>' + badge(j.state) +
       '<div class="evidence">' + esc(j.evidence || '等待 Agent 在官网添加') + '</div><div class="muted">' + esc(dateText(j.updated_at,true)) +
       (j.observation_source === 'user' ? ' · 用户确认' : '') + '</div></td><td><button class="text-button" data-action="copy-magnet" data-job="' + j.id + '">复制磁力</button>' +
@@ -173,70 +180,129 @@ async function refresh() {
   try { await api('/api/agent/prepare','POST',{}); toast('开始检查蜜柑，准备待添加清单'); await poll(); }
   catch (error) { toast(error.message); $('#refresh').disabled = false; }
 }
-function openAdd(index=null) {
+function showBangumiChoice() {
+  $('#metadata-selected').textContent = chosenBangumi ? '已关联：' + (chosenBangumi.name_cn || chosenBangumi.name_original) + ' · Bangumi #' + chosenBangumi.bangumi_id : '';
+  $('#clear-bangumi').hidden = !chosenBangumi;
+}
+function openAdd(index=null,subject=null) {
   searchSequence++;
-  editingIndex = index; chosenBangumi = null; draft = null;
+  editingIndex = index; suggestedBangumi = subject; chosenBangumi = subject; draft = null; availableVariants = []; preferredGroups = [];
   $('#search-results').innerHTML = ''; $('#bangumi-results').innerHTML = ''; $('#metadata-selected').textContent = '';
   $('#search-status').textContent = ''; $('#search-query').value = ''; $('#search-row').hidden = index !== null;
   $('#watch-form').hidden = true;
+  $('#save').disabled = false; $('#lookup-bangumi').disabled = false;
   $('#add-title').textContent = index === null ? '添加追番' : '编辑追番';
   if (index !== null) {
     const s = library.series[index];
     draft = {id:s.mikan_id,name:s.name,cover:s.cover_url};
-    fillDraft(s.subtitle_groups || [],s.language,s.embedded_only,s.save_path);
+    fillDraft(s.subtitle_groups || [],s.language,s.embedded_only,s.save_path,s.subtitle_type,s.resolution,s.strict_groups ?? false);
+    loadVariants(false);
   }
+  showBangumiChoice();
   $('#add-dialog').showModal();
+  if (subject) {
+    $('#search-query').value = subject.name_cn || subject.name_original;
+    searchMikan();
+  }
 }
-function fillDraft(groups,language='简体',embedded=true,path=null) {
+function fillDraft(groups,language='简体',embedded=true,path=null,kind=null,resolution='不限',strict=true) {
   $('#selected-title').textContent = draft.name + ' · 蜜柑 #' + draft.id;
-  $('#groups').value = groups.join('，'); $('#language').value = language || '简体'; $('#embedded').value = String(embedded !== false);
+  preferredGroups = [...groups]; renderGroupOptions();
+  $('#language').value = language || '简体'; $('#embedded').value = kind || (embedded !== false ? '内嵌' : '不限');
+  $('#resolution').value = resolution || '不限'; $('#strict-group').checked = strict;
   $('#save-path').value = path || '/Anime/' + draft.name.replace(/[\\/:*?"<>|]/g,'_');
   $('#watch-form').hidden = false;
+  renderVariants();
+}
+function renderGroupOptions() {
+  const names = [...new Set([...preferredGroups,...availableVariants.map(v => v.group)])];
+  $('#groups').innerHTML = '<option value="">不限字幕组</option>' + names.map(name => {
+    const episodes = new Set(availableVariants.filter(v => v.group === name).flatMap(v => v.episodes));
+    return '<option value="' + esc(name) + '">' + esc(name) + ' · ' + episodes.size + ' 话</option>';
+  }).join('');
+  $('#groups').value = preferredGroups[0] || '';
+  $('#group-priority-note').textContent = preferredGroups.length > 1 ? '现有优先级：' + preferredGroups.join(' → ') + '。改选字幕组会重新设置此优先级。' : '';
+}
+function renderVariants() {
+  const group = $('#groups').value;
+  const variants = availableVariants.map((value,index) => ({...value,index})).filter(v => !group || v.group === group);
+  $('#variant-options').innerHTML = variants.map(v => {
+    const known = ['简体','繁体','简繁'].includes(v.language) && ['内嵌','外挂','内封'].includes(v.type);
+    const active = v.language === $('#language').value && v.type === $('#embedded').value && v.resolution === $('#resolution').value;
+    return '<button type="button" class="variant-option ' + (active ? 'selected' : '') + '" data-variant="' + v.index + '" ' + (known ? '' : 'disabled') +
+      ' title="' + esc(v.sample || '') + '"><strong>' + (!group ? esc(v.group) + ' · ' : '') + esc(v.language) + ' · ' + esc(v.type) + ' · ' + esc(v.resolution) +
+      '</strong><small>' + v.count + ' 话 · ' + esc(v.episodes.join('、')) + (!known ? ' · 字幕标记不明确' : '') + '</small></button>';
+  }).join('');
+  const matched = variants.filter(v => ($('#language').value === '不限' || v.language === $('#language').value) &&
+    ($('#embedded').value === '不限' || v.type === $('#embedded').value) && ($('#resolution').value === '不限' || v.resolution === $('#resolution').value));
+  const count = new Set(matched.flatMap(v => v.episodes)).size;
+  $('#variant-preview').textContent = '当前选择在' + (group ? '所选字幕组' : '全部字幕组') + '中匹配 ' + count + ' 话。' +
+    (!count ? '可保存偏好等待后续发布。' : '') + (group && !$('#strict-group').checked ? '未限定字幕组时，检查新集也可使用其他组。' : '');
+}
+async function loadVariants(autoSelect=false) {
+  if (!draft) return;
+  const id = draft.id, sequence = ++searchSequence;
+  $('#variant-status').textContent = '正在读取蜜柑的字幕组和资源版本…';
+  for (const id of ['groups','language','embedded','resolution','strict-group','save','reload-variants']) $('#' + id).disabled = true;
+  try {
+    const data = await api('/api/mikan/bangumi/' + id);
+    if (sequence !== searchSequence || draft?.id !== id) return;
+    availableVariants = data.groups || [];
+    if (autoSelect) {
+      const preferred = availableVariants.filter(v => v.language === '简体' && v.type === '内嵌').sort((a,b) => b.count - a.count || (b.resolution === '1080p') - (a.resolution === '1080p'))[0];
+      preferredGroups = preferred ? [preferred.group] : [];
+      if (preferred) {
+        $('#language').value = preferred.language; $('#embedded').value = preferred.type;
+        $('#resolution').value = preferred.resolution === '未知' ? '不限' : preferred.resolution;
+      }
+    }
+    renderGroupOptions(); renderVariants();
+    $('#variant-status').textContent = availableVariants.length ? '选择下方版本可同时设置语言、字幕形式和清晰度。' : '尚无可识别的普通单话资源，可保留偏好等待更新。';
+  } catch (error) {
+    if (sequence === searchSequence) $('#variant-status').textContent = '读取失败：' + error.message + '。当前偏好已保留，可以重试。';
+  } finally {
+    if (sequence === searchSequence) for (const id of ['groups','language','embedded','resolution','strict-group','save','reload-variants']) $('#' + id).disabled = false;
+  }
 }
 async function searchMikan() {
   const query = $('#search-query').value.trim();
   if (!query) return;
   const sequence = ++searchSequence;
-  draft = null; chosenBangumi = null; $('#watch-form').hidden = true; $('#search-results').innerHTML = '';
+  draft = null; chosenBangumi = suggestedBangumi; availableVariants = []; preferredGroups = [];
+  $('#watch-form').hidden = true; $('#search-results').innerHTML = ''; showBangumiChoice();
   $('#search-status').textContent = '正在搜索蜜柑…'; $('#search').disabled = true;
   try {
     const data = await api('/api/mikan/search?q=' + encodeURIComponent(query));
     if (sequence !== searchSequence) return;
     const results = data.results || [];
-    $('#search-status').textContent = results.length ? '选择匹配的番剧' : '没有找到匹配项，请尝试日文名或其他关键词。';
+    $('#search-status').textContent = results.length ? (suggestedBangumi ? '来自 Bangumi，请选择与上方片名对应的蜜柑条目。' : '选择匹配的番剧') : '没有找到匹配项，请尝试日文名或其他关键词。';
     $('#search-results').innerHTML = results.map((r,i) => '<button class="search-result" data-index="' + i + '">' +
       (poster(r.cover) ? '<img src="' + esc(poster(r.cover)) + '" alt="封面">' : '') + '<span>' + esc(r.name) + '</span></button>').join('');
     $$('#search-results button').forEach(button => button.onclick = async () => {
       const selected = results[Number(button.dataset.index)];
-      const selectionSequence = ++searchSequence;
-      draft = selected; chosenBangumi = null; $('#bangumi-results').innerHTML = ''; $('#metadata-selected').textContent = '';
-      $('#search-status').textContent = '正在解析可用字幕组…';
-      $('#watch-form').hidden = true;
-      try {
-        const data = await api('/api/mikan/bangumi/' + selected.id);
-        if (selectionSequence !== searchSequence) return;
-        const preferred = (data.groups || []).filter(group => group.language === '简体' && group.type === '内嵌').sort((a,b) => b.count - a.count)[0];
-        fillDraft(preferred ? [preferred.group] : []);
-        $('#search-status').textContent = preferred ? '已优先选择简体内嵌资源较多的字幕组，可修改偏好。' : '暂无明确的简体内嵌资源，可先保存追番。';
-      } catch (error) { $('#search-status').textContent = error.message; }
+      draft = selected; chosenBangumi = suggestedBangumi; availableVariants = [];
+      $('#bangumi-results').innerHTML = ''; showBangumiChoice();
+      $('#search-status').textContent = '已选择蜜柑条目，可在下方选择字幕资源。';
+      fillDraft([]); await loadVariants(true);
     });
   } catch (error) { $('#search-status').textContent = error.message; }
   finally { $('#search').disabled = false; }
 }
 async function lookupBangumi() {
   if (!draft) return;
+  const id = draft.id;
   $('#lookup-bangumi').disabled = true;
   $('#metadata-selected').textContent = '正在搜索 Bangumi…';
   try {
     const data = await api('/api/bangumi/search?q=' + encodeURIComponent(draft.name));
+    if (draft?.id !== id || !$('#add-dialog').open) return;
     const results = data.results || [];
     $('#bangumi-results').innerHTML = results.map((item,index) => '<button type="button" data-index="' + index + '">' +
       esc(item.name_cn || item.name_original) + ' · ' + esc(item.air_date || '日期待核实') + '</button>').join('');
     $('#metadata-selected').textContent = results.length ? '请选择与当前番剧匹配的动画条目。' : '暂无匹配资料。';
     $$('#bangumi-results button').forEach(button => button.onclick = () => {
       chosenBangumi = results[Number(button.dataset.index)];
-      $('#metadata-selected').textContent = '已关联：' + (chosenBangumi.name_cn || chosenBangumi.name_original) +
-        ' · ' + (chosenBangumi.total_episodes || '待核实') + ' 话';
+      showBangumiChoice();
     });
   } catch (error) { $('#metadata-selected').textContent = 'Bangumi 查询失败：' + error.message; }
   finally { $('#lookup-bangumi').disabled = false; }
@@ -244,13 +310,15 @@ async function lookupBangumi() {
 async function saveWatch(event) {
   event.preventDefault();
   if (!draft) return;
-  const body = {mikan_id:draft.id,name:draft.name,cover_url:draft.cover,subtitle_groups:$('#groups').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
-    language:$('#language').value,embedded_only:$('#embedded').value === 'true',save_path:$('#save-path').value.trim()};
+  const subject = chosenBangumi;
+  const body = {mikan_id:draft.id,name:draft.name,cover_url:draft.cover,subtitle_groups:[...preferredGroups],
+    language:$('#language').value,subtitle_type:$('#embedded').value,embedded_only:$('#embedded').value === '内嵌',
+    resolution:$('#resolution').value,strict_groups:$('#strict-group').checked,save_path:$('#save-path').value.trim()};
   $('#save').disabled = true;
   try {
     await api(editingIndex === null ? '/api/series' : '/api/series/' + editingIndex,editingIndex === null ? 'POST' : 'PUT',body);
-    if (chosenBangumi) {
-      try { await api('/api/metadata/' + draft.id,'POST',{bangumi_id:chosenBangumi.bangumi_id}); }
+    if (subject) {
+      try { await api('/api/metadata/' + body.mikan_id,'POST',{bangumi_id:subject.bangumi_id}); }
       catch (error) { toast('追番已保存，资料关联失败：' + error.message); }
     }
     $('#add-dialog').close(); toast('追番已保存'); await poll();
@@ -296,6 +364,18 @@ $('#close-add').onclick = () => { searchSequence++; $('#add-dialog').close(); };
 $('#search').onclick = searchMikan;
 $('#search-query').addEventListener('keydown',event => { if (event.key === 'Enter') searchMikan(); });
 $('#lookup-bangumi').onclick = lookupBangumi; $('#watch-form').onsubmit = saveWatch;
+$('#clear-bangumi').onclick = () => { suggestedBangumi = null; chosenBangumi = null; showBangumiChoice(); };
+$('#groups').onchange = () => { preferredGroups = $('#groups').value ? [$('#groups').value] : []; $('#strict-group').checked = !!preferredGroups.length; renderGroupOptions(); renderVariants(); };
+for (const id of ['language','embedded','resolution','strict-group']) $('#' + id).onchange = renderVariants;
+$('#reload-variants').onclick = () => loadVariants(false);
+$('#variant-options').onclick = event => {
+  const button = event.target.closest('[data-variant]');
+  if (!button || button.disabled) return;
+  const variant = availableVariants[Number(button.dataset.variant)];
+  preferredGroups = [variant.group]; renderGroupOptions(); $('#strict-group').checked = true;
+  $('#language').value = variant.language; $('#embedded').value = variant.type; $('#resolution').value = variant.resolution;
+  renderVariants();
+};
 $('#close-observe').onclick = () => $('#observe-dialog').close();
 $('#observe-form').onsubmit = async event => {
   event.preventDefault(); $('#save-observe').disabled = true;

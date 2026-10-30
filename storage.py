@@ -55,6 +55,12 @@ def validate_series(item):
         raise ValueError("不支持的语言")
     if type(item.get("embedded_only", True)) is not bool:
         raise ValueError("embedded_only 必须是布尔值")
+    if item.get("subtitle_type", "不限") not in ("内嵌", "外挂", "内封", "不限"):
+        raise ValueError("不支持的字幕形式")
+    if item.get("resolution", "不限") not in ("不限", "2160p", "1440p", "1080p", "720p", "480p", "未知"):
+        raise ValueError("不支持的清晰度")
+    if type(item.get("strict_groups", False)) is not bool:
+        raise ValueError("strict_groups 必须是布尔值")
     path = item.get("save_path", "")
     if not isinstance(path, str) or not path.startswith("/") or any(p == ".." for p in path.split("/")):
         raise ValueError("网盘路径必须以 / 开头，且不能含 ..")
