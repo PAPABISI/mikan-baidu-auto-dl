@@ -9,6 +9,7 @@ import json
 import mimetypes
 import os
 import re
+import socket
 import threading
 import time
 import urllib.parse
@@ -287,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("请输入番名")
                 return self._send(200, {"results": mikan_search(term)})
             if re.fullmatch(r"/api/mikan/bangumi/[1-9]\d*", path):
-                return self._send(200, {"groups": mikan_bangumi(int(path.rsplit("/", 1)[-1]))})
+                return self._send(200, {"groups": mikan_bangumi(int(path.rsplit("/", 1)[-1])), "collection_support": True})
             if path == "/api/mikan/cover":
                 target = urllib.parse.urlsplit(query.get("url", [""])[0])
                 if target.scheme != "https" or target.netloc != "mikanani.me" or not target.path.startswith("/images/"):
@@ -407,10 +408,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, stream.read(), ctype)
 
 
+class LocalHTTPServer(ThreadingHTTPServer):
+    # Windows 的 SO_REUSEADDR 会让新旧进程同时占用同一端口，响应可能来自旧服务。
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def create_server(port=PORT_DEFAULT):
     for candidate in range(port, port + 10):
         try:
-            return ThreadingHTTPServer((HOST, candidate), Handler)
+            return LocalHTTPServer((HOST, candidate), Handler)
         except OSError as error:
             if error.errno not in (48, 98, 10048):
                 raise

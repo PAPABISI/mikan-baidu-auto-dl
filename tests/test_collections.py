@@ -106,6 +106,7 @@ class CollectionHTTPTests(HTTPFixture):
         with patch.object(web_app.auto_dl, 'fetch_mikan', return_value=collection_html()):
             status, data = self.request('/api/mikan/bangumi/4059')
         self.assertEqual(status, 200)
+        self.assertTrue(data['collection_support'])
         variant = data['groups'][0]
         self.assertEqual(variant['group'], 'LoliHouse')
         self.assertEqual(variant['count'], 0)

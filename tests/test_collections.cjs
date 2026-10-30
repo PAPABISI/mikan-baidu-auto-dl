@@ -57,3 +57,37 @@ test('详情单列合集候选及重叠话数', () => {
   assert.match(nodes.get('#detail-content').innerHTML, /合集资源 · 1 个候选/);
   assert.match(nodes.get('#detail-content').innerHTML, /01、02/);
 });
+
+test('默认选中单话字幕组时仍显示其他组合集，不自动改变偏好', () => {
+  const {context,nodes} = setup();
+  vm.runInContext("availableVariants=[{group:'桜都字幕组',language:'简体',type:'内嵌',resolution:'1080p',count:5,episodes:['10','11','12','13','14'],collection_count:0,collections:[]},...input]; preferredGroups=['桜都字幕组']; $('#language').value='简体'; $('#embedded').value='内嵌'; $('#resolution').value='1080p'; $('#strict-group').checked=true; renderGroupOptions(); renderVariants();",context);
+  assert.match(nodes.get('#collection-options').innerHTML, /全部字幕组的合集 · 1 个/);
+  assert.match(nodes.get('#collection-options').innerHTML, /LoliHouse/);
+  assert.match(nodes.get('#variant-preview').textContent, /其他字幕组还有 1 个合集/);
+  assert.equal(nodes.get('#groups').value,'桜都字幕组');
+  assert.equal(nodes.get('#language').value,'简体');
+  vm.runInContext('chooseVariant(1)',context);
+  assert.equal(nodes.get('#groups').value,'LoliHouse');
+  assert.equal(nodes.get('#language').value,'简繁');
+  assert.equal(nodes.get('#embedded').value,'内封');
+});
+
+test('旧版后台缺少合集字段时显示未知和重启提示，不误报零个', async () => {
+  const {context,nodes} = setup();
+  context.reply = {groups:[{group:'桜都字幕组',language:'简体',type:'内嵌',resolution:'1080p',count:5,episodes:['10','11','12','13','14']}]};
+  vm.runInContext('api=async()=>reply; draft={id:3898};',context);
+  await vm.runInContext('loadVariants(true)',context);
+  assert.match(nodes.get('#variant-preview').textContent, /合集数量未知/);
+  assert.doesNotMatch(nodes.get('#variant-preview').textContent, /0 个合集/);
+  assert.match(nodes.get('#collection-options').innerHTML, /旧版后台/);
+  assert.match(nodes.get('#variant-status').textContent, /重启/);
+});
+
+test('新版后台正常返回空结果时不会误判为旧版', async () => {
+  const {context,nodes} = setup();
+  context.reply = {groups:[],collection_support:true};
+  vm.runInContext('api=async()=>reply; draft={id:3898};',context);
+  await vm.runInContext('loadVariants(true)',context);
+  assert.doesNotMatch(nodes.get('#variant-status').textContent, /旧版/);
+  assert.equal(nodes.get('#collection-options').hidden,true);
+});

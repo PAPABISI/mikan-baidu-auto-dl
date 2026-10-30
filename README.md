@@ -26,6 +26,8 @@ python web_app.py --port 8766
 
 默认从 http://127.0.0.1:8765 启动；端口占用会顺延，以终端打印地址为准。只监听本机，按 Ctrl+C 关闭。保持运行才能查看 Web；CLI 和 Agent 调度可直接读写数据，不依赖 Web 服务常驻。
 
+更新 Python 代码后，先在旧服务控制台按 Ctrl+C，再运行 `start.bat`；刷新网页不会重新加载后台代码。Windows 服务使用独占端口，避免多个版本同时监听同一端口。多次启动时仍以新控制台打印的地址为准。合集界面会检测旧版接口并提示重启，不能把缺少合集字段当作“没有合集”。
+
 Web 提供：
 
 - 番剧封面、简介、制作方、总话数、字幕组与语言偏好。
@@ -35,6 +37,7 @@ Web 提供：
 - 搜索蜜柑、关联 Bangumi、编辑追番偏好、重试明确失败的任务。
 - 新增与编辑追番均可下拉选择字幕组，再选择简体/繁体/简繁、内嵌/外挂/内封及清晰度；版本按钮显示可用话数，并可一键填入这些条件。
 - 支持识别 `01-14 合集`、区间、全集及 Batch/Complete 等合集标记。只有合集的字幕组也可选；版本分别显示单话数和合集数，并提供“复制合集磁力”。日常检查会将合集保存在独立候选区，详情提示字幕偏好不符及与已有任务的重叠，不把一个合集计为一话或虚构多话已入盘。
+- 新增/编辑追番会展示全部字幕组的合集，即使默认选中另一组的简体内嵌版本也能发现；“选用此合集的字幕版本”会明确切换字幕组、语言、字幕形式与清晰度，未点击时保留原偏好。
 - “季度新番”可选择年份、季度，按热度/评分/排名浏览 Bangumi 公开动画，显示评分人数、简介与首播日期，支持分页、季度内搜索和从条目转到蜜柑找资源。
 - “记录手动结果”：先在官网操作，再选择实际结果并填写文件名、目录或任务提示；这类记录标明“用户确认”。受理和完成要分别记录。
 - “核实入盘”：番剧详情支持逐话多选、全选及取消全选；全选仅包含当前番剧可核实的任务，执行中、已入盘和已替换任务不参与。核对确认窗口中的话数、资源和目录，填写适用于每一项的实际证据后保存；每话分别保留用户确认及历史。结果不同请分批记录，任一任务状态冲突时整批不保存。
@@ -146,7 +149,7 @@ observe 用于真实存在的文件或人工添加结果，不声称 Agent 执�
 | POST /api/agent/observe-batch | body: job_ids（非空且不重复）、state、source、evidence；同一番剧和目录，全部成功或全部不保存，返回 jobs |
 | POST /api/agent/retry | body: job_id、evidence，仅明确失败可重试 |
 | GET /api/mikan/search?q= | 蜜柑搜索 |
-| GET /api/mikan/bangumi/{id} | 字幕组与资源分布；count/episodes 仍为单话，新增 collection_count/collections 提供合集及磁力 |
+| GET /api/mikan/bangumi/{id} | 字幕组与资源分布；count/episodes 仍为单话，collection_count/collections 提供合集及磁力；collection_support=true 标记后台支持合集 |
 | GET /api/bangumi/search?q= | 仅动画条目搜索 |
 | GET /api/bangumi/season?year=2026&quarter=4&page=1&sort=heat&q= | 季度公开动画分页与评分，sort 支持 heat/score/rank，refresh=1 强制更新 |
 | POST /api/metadata/{mikan_id} | 资料更新，或 body: bangumi_id |

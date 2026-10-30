@@ -10,6 +10,7 @@ let pollTimer = null, toastTimer = null, fetching = false;
 let observationJobs = [], selectedJobs = new Set();
 let renderedData = '';
 let activeView = 'library', availableVariants = [], preferredGroups = [], suggestedBangumi = null;
+let collectionSupport = true;
 
 async function api(path, method='GET', body=null) {
   const response = await fetch(path,{method,headers:{'Content-Type':'application/json'},
@@ -143,6 +144,7 @@ function collectionCards(items) {
     '<article class="collection-card"><div class="collection-heading"><strong>' + esc(item.episode_label) + '</strong><button type="button" class="text-button" data-copy-collection="' +
     esc(item.infohash) + '">复制合集磁力</button></div><p>' + esc(item.title) + '</p><div class="chips"><span class="chip">' + esc(item.group) + '</span><span class="chip">' +
     esc(item.lang) + esc(item.subtitle_type) + ' · ' + esc(item.resolution) + '</span><span class="chip">' + esc(item.size || '大小未知') + '</span></div>' +
+    (Number.isInteger(item.variant_index) ? '<p><button type="button" class="text-button" data-collection-variant="' + item.variant_index + '">选用此合集的字幕版本</button></p>' : '') +
     (item.matches_preferences === false ? '<p class="collection-note">与当前字幕偏好不符，仅供手动选择。</p>' : '') +
     (item.overlap_episodes?.length ? '<p class="collection-note">包含已有执行中、已入盘或待核验记录的话数：' + esc(item.overlap_episodes.join('、')) + '，请核对重复。</p>' : '') +
     '<details><summary class="muted">磁力文本</summary><code class="collection-magnet">' + esc(item.magnet) + '</code></details></article>').join('');
@@ -289,15 +291,33 @@ function renderVariants() {
       '</strong><small>' + v.count + ' 话' + (v.episodes.length ? ' · ' + esc(v.episodes.join('、')) : '') +
       (v.collection_count ? ' · ' + v.collection_count + ' 个合集' : '') + (!known ? ' · 字幕标记不明确' : '') + '</small></button>';
   }).join('');
-  const matched = variants.filter(v => ($('#language').value === '不限' || v.language === $('#language').value) &&
-    ($('#embedded').value === '不限' || v.type === $('#embedded').value) && ($('#resolution').value === '不限' || v.resolution === $('#resolution').value));
+  const matchesSubtitle = v => ($('#language').value === '不限' || v.language === $('#language').value) &&
+    ($('#embedded').value === '不限' || v.type === $('#embedded').value) && ($('#resolution').value === '不限' || v.resolution === $('#resolution').value);
+  const matched = variants.filter(matchesSubtitle);
   const count = new Set(matched.flatMap(v => v.episodes)).size;
   const collections = matched.reduce((sum,v) => sum + (v.collection_count || 0),0);
   $('#variant-preview').textContent = '当前选择在' + (group ? '所选字幕组' : '全部字幕组') + '中匹配 ' + count + ' 话、' + collections + ' 个合集。' +
     (!count ? collections ? '合集可复制磁力，暂不生成逐话待添加任务。' : '可保存偏好等待后续发布。' : '') + (group && !$('#strict-group').checked ? '未限定字幕组时，检查新集也可使用其他组。' : '');
-  const batches = variants.flatMap(v => (v.collections || []).map(item => ({...item, matches_preferences:matched.includes(v)})));
-  $('#collection-options').hidden = !batches.length;
-  $('#collection-options').innerHTML = batches.length ? '<h3>可用合集</h3>' + collectionCards(batches) : '';
+  const batches = availableVariants.flatMap((v,index) => (v.collections || []).map(item => ({...item,
+    variant_index:['简体','繁体','简繁'].includes(v.language) && ['内嵌','外挂','内封'].includes(v.type) ? index : null,
+    matches_preferences:matchesSubtitle(v) && (!$('#strict-group').checked || !group || v.group === group)})));
+  if (!collectionSupport) {
+    $('#variant-preview').textContent = '当前后台版本不支持合集，合集数量未知。请关闭旧 Web 服务，重新运行 start.bat，并打开终端打印的新地址。';
+    $('#collection-options').hidden = false;
+    $('#collection-options').innerHTML = '<p class="collection-note" role="alert">检测到旧版后台：请重启 Python Web 服务；仅刷新网页无法更新后台。</p>';
+  } else {
+    const others = batches.filter(item => group && item.group !== group).length;
+    if (others) $('#variant-preview').textContent += '其他字幕组还有 ' + others + ' 个合集，见下方。';
+    $('#collection-options').hidden = !batches.length;
+    $('#collection-options').innerHTML = batches.length ? '<h3>全部字幕组的合集 · ' + batches.length + ' 个</h3>' + collectionCards(batches) : '';
+  }
+}
+function chooseVariant(index) {
+  const variant = availableVariants[index];
+  if (!variant || !['简体','繁体','简繁'].includes(variant.language) || !['内嵌','外挂','内封'].includes(variant.type)) return;
+  preferredGroups = [variant.group]; renderGroupOptions(); $('#strict-group').checked = true;
+  $('#language').value = variant.language; $('#embedded').value = variant.type; $('#resolution').value = variant.resolution;
+  renderVariants();
 }
 async function loadVariants(autoSelect=false) {
   if (!draft) return;
@@ -308,6 +328,8 @@ async function loadVariants(autoSelect=false) {
     const data = await api('/api/mikan/bangumi/' + id);
     if (sequence !== searchSequence || draft?.id !== id) return;
     availableVariants = data.groups || [];
+    collectionSupport = data.collection_support === true || (availableVariants.length > 0 && availableVariants.every(v =>
+      Number.isInteger(v.collection_count) && Array.isArray(v.collections)));
     if (autoSelect) {
       const preferred = availableVariants.filter(v => v.language === '简体' && v.type === '内嵌').sort((a,b) => b.count - a.count || (b.resolution === '1080p') - (a.resolution === '1080p'))[0];
       preferredGroups = preferred ? [preferred.group] : [];
@@ -317,7 +339,7 @@ async function loadVariants(autoSelect=false) {
       }
     }
     renderGroupOptions(); renderVariants();
-    $('#variant-status').textContent = availableVariants.length ? '选择下方版本可设置字幕偏好；合集另列并可复制磁力。' : '尚无可识别的单话或合集资源，可保留偏好等待更新。';
+    $('#variant-status').textContent = !collectionSupport ? '检测到旧版后台，请重启 Web 服务以读取合集。' : availableVariants.length ? '选择下方版本可设置字幕偏好；下方同时展示全部字幕组的合集。' : '尚无可识别的单话或合集资源，可保留偏好等待更新。';
   } catch (error) {
     if (sequence === searchSequence) $('#variant-status').textContent = '读取失败：' + error.message + '。当前偏好已保留，可以重试。';
   } finally {
@@ -449,16 +471,15 @@ $('#groups').onchange = () => { preferredGroups = $('#groups').value ? [$('#grou
 for (const id of ['language','embedded','resolution','strict-group']) $('#' + id).onchange = renderVariants;
 $('#reload-variants').onclick = () => loadVariants(false);
 $('#collection-options').onclick = event => {
+  const choice = event.target.closest('[data-collection-variant]');
+  if (choice) { chooseVariant(Number(choice.dataset.collectionVariant)); return; }
   const button = event.target.closest('[data-copy-collection]');
   if (button) copyCollection(button,availableVariants.flatMap(v => v.collections || []));
 };
 $('#variant-options').onclick = event => {
   const button = event.target.closest('[data-variant]');
   if (!button || button.disabled) return;
-  const variant = availableVariants[Number(button.dataset.variant)];
-  preferredGroups = [variant.group]; renderGroupOptions(); $('#strict-group').checked = true;
-  $('#language').value = variant.language; $('#embedded').value = variant.type; $('#resolution').value = variant.resolution;
-  renderVariants();
+  chooseVariant(Number(button.dataset.variant));
 };
 $('#close-observe').onclick = () => $('#observe-dialog').close();
 $('#observe-dialog').addEventListener('cancel',event => { if ($('#save-observe').disabled) event.preventDefault(); });

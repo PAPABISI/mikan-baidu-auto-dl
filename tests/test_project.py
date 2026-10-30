@@ -528,6 +528,23 @@ class QRTests(TemporaryProject):
         self.assertNotIn("secret-bduss", str(caught.exception))
 
 
+class ServerBindingTests(unittest.TestCase):
+    def test_active_port_is_not_reused_by_second_server(self):
+        first = web_app.create_server(0)
+        self.addCleanup(first.server_close)
+        second = web_app.create_server(first.server_port)
+        self.addCleanup(second.server_close)
+        self.assertNotEqual(first.server_port, second.server_port)
+
+    def test_listener_cannot_be_shared_with_reuseaddr_socket(self):
+        server = web_app.create_server(0)
+        self.addCleanup(server.server_close)
+        with web_app.socket.socket(web_app.socket.AF_INET, web_app.socket.SOCK_STREAM) as contender:
+            contender.setsockopt(web_app.socket.SOL_SOCKET, web_app.socket.SO_REUSEADDR, 1)
+            with self.assertRaises(OSError):
+                contender.bind(server.server_address)
+
+
 class HTTPFixture(TemporaryProject):
     def setUp(self):
         super().setUp()
