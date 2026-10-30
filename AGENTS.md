@@ -69,6 +69,16 @@ report 从 stdin 或 UTF-8 JSON 文件读取：
 
 Web 详情支持逐话多选和全选后“核实入盘”，确认前列出具体任务。批量 HTTP 入口为 POST `/api/agent/observe-batch`，参数 job_ids、state、source、evidence；仅允许同一番剧和目录，事务内逐话保存来源和证据，任一冲突整批不写入。批量操作同样需要每话真实证据，不能因勾选就视为已入盘。
 
+## 网盘连接器核验（自动核实入盘）
+
+已连接百度网盘连接器（只读目录浏览、文件元信息、建目录等）的 Agent 可以把“核实入盘”自动化，但不能自动云添加：
+
+1. 用连接器的目录浏览读取 `/Anime/<番名>` 的文件清单（文件名、大小；目录条目传 `isdir: true`）。
+2. 调用 `python agent_cli.py verify --input verify.json` 或 POST `/api/agent/verify`，body 为 `{"save_path": "...", "files": [...], "source": "web"}`。Agent 亲自通过授权接口观察到的清单按 source=web 记录；source=user 仅用于用户明确提供并确认的清单。
+3. 程序按话数唯一匹配文件与任务，只对 READY/SUBMITTED/DOWNLOADING/UNKNOWN/FAILED 状态记录 COMPLETED，证据含真实文件名与大小。同一话多个文件（如 01 与 01v2 共存）或多个候选任务、以及 CLAIMED/SUBMITTING/COMPLETED/SUPERSEDED 任务都不写入，仅在返回的 ambiguous / jobs_without_file / files_without_job 中报告；需要先人工确认再走 observe。
+4. 连接器没有离线下载/磁力提交接口，云添加仍按上文协议手动执行；不能用“文件已存在”反推提交历史，也不能用 verify 修改已完成的记录。先建目录时可用连接器的创建文件夹工具，目标仍必须是 `/Anime/<番名>`。
+5. `--dry-run` 或 `dry_run: true` 只返回计划，不写入；清单来源必须是真实读取结果，禁止编造文件名或大小填充清单。
+
 ## 并发、中断与真实性
 
 - 领取租约 15 分钟。未开始提交的领取过期后可重新领取；已进入 SUBMITTING 后中断会成为 UNKNOWN，必须先查看网盘。

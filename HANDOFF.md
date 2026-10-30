@@ -2,6 +2,10 @@
 
 本节覆盖后面的早期 API 方案。请先读 README.md 与 AGENTS.md。
 
+分支 B 新增网盘连接器核验：`verify.py` + `agent_cli.py verify` + POST `/api/agent/verify`。调用方（Agent）用百度网盘连接器的只读目录浏览取 `/Anime/<番名>` 文件清单后提交，程序按话数唯一匹配并原子写入 COMPLETED（source=web，证据含真实文件名与大小）；同一话多文件/多任务、执行中或已完成任务只报告不写入，`--dry-run` 只出计划。连接器无离线下载接口，云添加仍手动。已验证 131 项 Python 测试（含 11 项 verify 单测与 1 项 HTTP 路由测试）通过。本工作副本默认端口 8785；另一副本（D:/GitRepository/MiKan）归其他 AI 维护，勿动其进程与数据。
+
+本工作副本（D:/WorkBuddyProject/MiKan_WorkBuddy/mikan-baidu-auto-dl，分支 B）从 main 同一提交创建，`data/library.json` 为本副本独立空库，与另一副本的真实入盘记录互不影响。
+
 本次运行验收使用用户实际地址 http://127.0.0.1:8766/，从新增追番搜索“冰之城墙”并选择3898，默认桜都简体内嵌下已显示其他字幕组的 LoliHouse 01–14 合集；“选用此合集的字幕版本”正确切换简繁内封1080p。8765/8766 实际接口均返回 collection_support=true 和1个 LoliHouse 合集，系统端口表确认各仅一个新版监听。验收未保存新追番或修改入盘记录。
 
 用户手测合集失败的根因已定位：浏览器读取了新 JS，但旧 Python 服务仍返回不含合集字段的 groups；Windows SO_REUSEADDR 曾允许新旧进程同时监听相同端口。已改 LocalHTTPServer 为 Windows 独占监听，并增加重复端口/复用端口回归；合集接口增加 collection_support，前端识别旧服务时提示“数量未知、重启后台”，不误报零合集。同时合集区改为展示全部字幕组，默认选中桜都简体内嵌时仍可看到 LoliHouse 合集，通过明确按钮才切换偏好。已清理核实属于本项目的重复旧服务，在 8765/8766 各启动唯一新版，119 项 Python、12 项 Node 测试通过。

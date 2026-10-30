@@ -640,6 +640,21 @@ class HTTPTests(HTTPFixture):
         self.assertEqual(self.request("/api/library")[1]["stats"]["COMPLETED"], 2)
         self.assertEqual(self.request("/api/agent/observe-batch", "POST", body)[0], 400)
 
+    def test_verify_http_records_completion_from_netdisk_listing(self):
+        catalog.enqueue(series(), parse_mikan(row()))
+        body = {"save_path": "/Anime/测试番", "source": "web",
+                "files": [{"filename": "[绿茶字幕组] 测试番 [01] [1080P] [简体内嵌].mp4", "size": 453786047}]}
+        self.assertEqual(self.request("/api/agent/verify", "POST", {**body, "dry_run": True})[1]["recorded"], [])
+        self.assertEqual(self.request("/api/library")[1]["stats"]["READY"], 1)
+        status, result = self.request("/api/agent/verify", "POST", body)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(result["recorded"]), 1)
+        self.assertIn("[01]", result["recorded"][0]["evidence"])
+        data = self.request("/api/library")[1]
+        self.assertEqual(data["stats"]["COMPLETED"], 1)
+        self.assertEqual(data["jobs"][0]["observation_source"], "web")
+        self.assertEqual(self.request("/api/agent/verify", "POST", {"save_path": "/Anime/测试番", "files": []})[0], 400)
+
     def test_library_http_exposes_blocker_without_claiming_success(self):
         catalog.enqueue(series(), parse_mikan(row()))
         catalog.transact(lambda data: data.update(executor={"status": "BLOCKED"}))

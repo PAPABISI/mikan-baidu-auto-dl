@@ -101,6 +101,16 @@ observe 用于真实存在的文件或人工添加结果，不声称 Agent 执�
 
 `source=user` 表示用户确认，`source=web` 表示 Agent 亲自观察官网。没有对应证据时不能运行此示例。正在领取或提交的任务不能被观察记录覆盖。
 
+具备网盘只读能力的 Agent（例如已连接百度网盘连接器）可以自动核验入盘：先读取 `/Anime/<番名>` 目录的文件清单，再调用 verify 接口。程序按话数把文件与任务唯一匹配，仅对无歧义且允许覆盖的状态（READY/SUBMITTED/DOWNLOADING/UNKNOWN/FAILED）写入 COMPLETED，证据为真实文件名与大小；同一话出现多个文件（如 01 与 01v2 共存）或多个候选任务时只报告歧义，不写入。
+
+```powershell
+# verify.json：{"save_path":"/Anime/FX战士久留美","files":[{"filename":"[Studio GreenTea] ... [01v2] ....mp4","size":453786047}]}
+python agent_cli.py verify --input verify.json
+python agent_cli.py verify --input verify.json --dry-run
+```
+
+清单文件由 Agent 的网盘只读工具提供，本程序不访问网盘；清单为空或不合法时报错，不据此改写记录。核验自动化不改变云添加流程：连接器没有离线下载接口，磁力提交仍需在官网手动完成。
+
 ## 任务状态与去重
 
 | 状态 | 含义 |
@@ -147,6 +157,7 @@ observe 用于真实存在的文件或人工添加结果，不声称 Agent 执�
 | POST /api/agent/review | body: job_id、state、evidence |
 | POST /api/agent/observe | body: job_id、state、source、evidence |
 | POST /api/agent/observe-batch | body: job_ids（非空且不重复）、state、source、evidence；同一番剧和目录，全部成功或全部不保存，返回 jobs |
+| POST /api/agent/verify | body: save_path、files（网盘文件清单）、source（默认 web）、dry_run；按话数匹配任务并记录入盘证据，返回计划与结果 |
 | POST /api/agent/retry | body: job_id、evidence，仅明确失败可重试 |
 | GET /api/mikan/search?q= | 蜜柑搜索 |
 | GET /api/mikan/bangumi/{id} | 字幕组与资源分布；count/episodes 仍为单话，collection_count/collections 提供合集及磁力；collection_support=true 标记后台支持合集 |
@@ -170,6 +181,7 @@ observe 用于真实存在的文件或人工添加结果，不声称 Agent 执�
 - `追番列表.json`：追番配置。
 - `data/library.json`：唯一新片库，持久保存元数据、每话任务和完整事件。已 Git 忽略，迁移时需自行备份；片库页面和普通接口展示最近 200 条事件，Web 导出包含全部事件。
 - `catalog.py`：任务、领取、状态转换、事件事务。
+- `verify.py`：网盘目录清单与任务的匹配核验；不访问网络，不提交网盘。
 - `agent_bridge.py` / `agent_cli.py`：准备资源与跨 Agent JSON 协议。
 - `metadata.py` / `parse_mikan.py`：Bangumi 资料与蜜柑解析。
 - `season.py` / `static/season.js`：季度新番浏览；公开资料缓存为 `data/season-cache.json`，不进入 Git，不替代真实入盘记录库。

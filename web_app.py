@@ -25,6 +25,7 @@ import storage
 from baidu import BaiduClient, LoginRequired, NETWORK_ERRORS, make_opener, req, safe_error
 from parse_mikan import parse_mikan, subtitle_kind
 from qr_cloud_dl import ensure_login
+from verify import verify_listing
 
 BASE = storage.BASE
 STATIC_DIR = os.path.join(BASE, "static")
@@ -322,6 +323,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"job": catalog.observe(body["job_id"], body["state"], body["evidence"], body["source"])})
             if path == "/api/agent/observe-batch":
                 return self._send(200, {"jobs": catalog.observe_batch(body["job_ids"], body["state"], body["evidence"], body["source"])})
+            if path == "/api/agent/verify":
+                return self._send(200, verify_listing(body["save_path"], body["files"],
+                                                      body.get("source", "web"),
+                                                      apply=not body.get("dry_run", False)))
             if path == "/api/agent/retry":
                 return self._send(200, {"job": catalog.retry(body["job_id"], body["evidence"])})
             if re.fullmatch(r"/api/metadata/[1-9]\d*", path):

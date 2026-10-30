@@ -9,6 +9,7 @@ import agent_bridge
 import catalog
 import metadata
 from baidu import safe_error
+from verify import verify_listing
 
 
 def main(argv=None):
@@ -40,6 +41,9 @@ def main(argv=None):
     review.add_argument("--input", default="-")
     observe = commands.add_parser("observe", help="记录用户确认或网页可见的手动添加/已存在结果")
     observe.add_argument("--input", default="-")
+    verify = commands.add_parser("verify", help="用网盘目录文件清单核验任务并记录入盘证据")
+    verify.add_argument("--input", default="-")
+    verify.add_argument("--dry-run", action="store_true", help="只生成核验计划，不写入记录")
     commands.add_parser("library", help="导出不含凭据的 Web 数据")
     args = parser.parse_args(argv)
     try:
@@ -90,6 +94,16 @@ def main(argv=None):
                 result = catalog.review(body["job_id"], body["state"], body["evidence"])
             else:
                 result = catalog.observe(body["job_id"], body["state"], body["evidence"], body["source"])
+        elif args.command == "verify":
+            if args.input == "-":
+                body = json.load(sys.stdin)
+            else:
+                with open(args.input, encoding="utf-8-sig") as stream:
+                    body = json.load(stream)
+            if not isinstance(body, dict):
+                raise ValueError("输入必须是 JSON 对象")
+            result = verify_listing(body["save_path"], body["files"], body.get("source", "web"),
+                                    apply=(not args.dry_run and body.get("apply", True)))
         else:
             result = catalog.snapshot()
         print(json.dumps({"ok": True, "data": result}, ensure_ascii=False, indent=2))
