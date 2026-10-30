@@ -21,6 +21,7 @@ import catalog
 import qr_cloud_dl
 import storage
 import web_app
+import filelock
 from filelock import FileLock
 from parse_mikan import episode_info, parse_mikan, select_for_series
 
@@ -123,6 +124,26 @@ class StorageTests(TemporaryProject):
             with self.assertRaises(TimeoutError):
                 with FileLock(storage.LIST_LOCK, timeout=0):
                     pass
+        with FileLock(storage.LIST_LOCK, timeout=0):
+            pass
+
+    def test_lock_waits_instead_of_writing_to_an_empty_locked_file(self):
+        with open(storage.LIST_LOCK, "w+b") as owner:
+            if os.name == "nt":
+                filelock.msvcrt.locking(owner.fileno(), filelock.msvcrt.LK_NBLCK, 1)
+            else:
+                filelock.fcntl.flock(owner.fileno(), filelock.fcntl.LOCK_EX | filelock.fcntl.LOCK_NB)
+            try:
+                with self.assertRaises(TimeoutError):
+                    with FileLock(storage.LIST_LOCK, timeout=0):
+                        pass
+                self.assertEqual(os.path.getsize(storage.LIST_LOCK), 0)
+            finally:
+                owner.seek(0)
+                if os.name == "nt":
+                    filelock.msvcrt.locking(owner.fileno(), filelock.msvcrt.LK_UNLCK, 1)
+                else:
+                    filelock.fcntl.flock(owner.fileno(), filelock.fcntl.LOCK_UN)
         with FileLock(storage.LIST_LOCK, timeout=0):
             pass
 
@@ -588,6 +609,19 @@ class HTTPTests(HTTPFixture):
         catalog.transact(lambda data: [catalog.event(data, "METADATA", f"事件 {i}") for i in range(205)])
         self.assertEqual(len(self.request("/api/library")[1]["events"]), 200)
         self.assertEqual(len(self.request("/api/library/export")[1]["events"]), 205)
+
+    def test_batch_manual_record_http_is_atomic_and_updates_each_job(self):
+        jobs = catalog.enqueue(series(), parse_mikan(row() + row("02", number=2)))
+        ids = [job["id"] for job in jobs]
+        body = {"job_ids": ids, "state": "COMPLETED", "source": "user", "evidence": "用户逐一核实01和02的mp4文件完整入盘"}
+        self.assertEqual(self.request("/api/agent/observe-batch", "POST", {**body, "job_ids": []})[0], 400)
+        self.assertEqual(self.request("/api/agent/observe-batch", "POST", {**body, "job_ids": ids + ["missing"]})[0], 400)
+        self.assertEqual(self.request("/api/library")[1]["stats"]["READY"], 2)
+        status, result = self.request("/api/agent/observe-batch", "POST", body)
+        self.assertEqual(status, 200)
+        self.assertEqual([job["id"] for job in result["jobs"]], ids)
+        self.assertEqual(self.request("/api/library")[1]["stats"]["COMPLETED"], 2)
+        self.assertEqual(self.request("/api/agent/observe-batch", "POST", body)[0], 400)
 
     def test_library_http_exposes_blocker_without_claiming_success(self):
         catalog.enqueue(series(), parse_mikan(row()))

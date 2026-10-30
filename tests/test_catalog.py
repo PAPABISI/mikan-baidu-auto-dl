@@ -148,6 +148,67 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             catalog.observe(job["id"], "COMPLETED", "", "user")
 
+    def test_batch_observation_records_each_selected_episode_only(self):
+        jobs = catalog.enqueue(config(), [resource(), resource("02", "b"), resource("03", "c")])
+        ids = [jobs[0]["id"], jobs[2]["id"]]
+        result = catalog.observe_batch(ids, "COMPLETED", "已逐一核实01和03的mp4文件完整入盘", "user")
+        data = catalog.snapshot()
+        self.assertEqual(data["stats"]["COMPLETED"], 2)
+        self.assertEqual(data["stats"]["READY"], 1)
+        self.assertEqual([job["id"] for job in result], ids)
+        self.assertNotIn("claim_token", json.dumps(result))
+        for job in result:
+            self.assertEqual(job["observation_source"], "user")
+            self.assertTrue(job["completed_at"])
+            self.assertIn("第 " + job["episode"] + " 话", job["evidence"])
+            self.assertIn(job["save_path"], job["evidence"])
+        events = [event for event in data["events"] if event["kind"] == "COMPLETED"]
+        self.assertEqual({event["job_id"] for event in events}, set(ids))
+        self.assertTrue(all(event["source"] == "user" for event in events))
+
+    def test_batch_observation_conflict_preserves_entire_library(self):
+        jobs = catalog.enqueue(config(), [resource(), resource("02", "b")])
+        ids = [job["id"] for job in jobs]
+        for state in ("CLAIMED", "SUBMITTING", "SUPERSEDED", "COMPLETED"):
+            with self.subTest(state=state):
+                catalog.transact(lambda data: data["jobs"][ids[1]].update(state=state))
+                before = catalog.load()
+                with self.assertRaises(ValueError):
+                    catalog.observe_batch(ids, "COMPLETED", "用户核实所选文件已入盘", "user")
+                self.assertEqual(catalog.load(), before)
+
+    def test_batch_observation_rejects_invalid_ids_and_evidence(self):
+        job = self.ready()
+        before = catalog.load()
+        for ids in ([], job["id"], [job["id"], job["id"]], [job["id"], None], [job["id"], "missing"]):
+            with self.subTest(ids=ids), self.assertRaises(ValueError):
+                catalog.observe_batch(ids, "COMPLETED", "已核实文件入盘", "user")
+        for state, evidence, source in (("READY", "实际文件已存在", "user"),
+                                        ("COMPLETED", "", "user"), ("COMPLETED", "实际文件已存在", "agent")):
+            with self.subTest(state=state, source=source), self.assertRaises(ValueError):
+                catalog.observe_batch([job["id"]], state, evidence, source)
+        self.assertEqual(catalog.load(), before)
+
+    def test_batch_submission_is_not_completion_and_preserves_blocker(self):
+        jobs = catalog.enqueue(config(), [resource(), resource("02", "b")])
+        catalog.transact(lambda data: data.update(executor={"status": "BLOCKED"}))
+        catalog.observe_batch([job["id"] for job in jobs], "SUBMITTED",
+                              "官网已受理这两话 BDUSS=not-a-real-cookie", "user")
+        data = catalog.snapshot()
+        self.assertEqual(data["stats"]["SUBMITTED"], 2)
+        self.assertEqual(data["stats"]["COMPLETED"], 0)
+        self.assertEqual(data["executor"]["status"], "BLOCKED")
+        self.assertNotIn("not-a-real-cookie", json.dumps(data))
+
+    def test_batch_observation_cannot_mix_series_or_directories(self):
+        job = self.ready()
+        for other in ({**config(), "mikan_id": 4060}, {**config(), "save_path": "/Anime/其他目录"}):
+            other_job = catalog.enqueue(other, [resource("02", "b")])[0]
+            before = catalog.load()
+            with self.assertRaisesRegex(ValueError, "同一番剧和保存目录"):
+                catalog.observe_batch([job["id"], other_job["id"]], "COMPLETED", "用户核实了目录文件", "user")
+            self.assertEqual(catalog.load(), before)
+
     def test_review_redacts_credentials(self):
         self.ready()
         job = catalog.claim("agent")

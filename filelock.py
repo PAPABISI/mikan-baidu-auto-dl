@@ -22,9 +22,6 @@ class FileLock:
         os.makedirs(os.path.dirname(self.lock_path) or ".", exist_ok=True)
         # 'a+' 让文件不存在时创建；不会截断已有内容
         self.fd = open(self.lock_path, "a+b")
-        if os.path.getsize(self.lock_path) == 0:
-            self.fd.write(b"\0")
-            self.fd.flush()
         deadline = time.monotonic() + self.timeout
         while True:
             try:
@@ -33,6 +30,10 @@ class FileLock:
                     msvcrt.locking(self.fd.fileno(), msvcrt.LK_NBLCK, 1)
                 else:
                     fcntl.flock(self.fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # 先上锁再初始化，避免并发首次创建时写入另一线程已锁定的字节。
+                if os.path.getsize(self.lock_path) == 0:
+                    self.fd.write(b"\0")
+                    self.fd.flush()
                 return self
             except OSError:
                 if time.monotonic() >= deadline:

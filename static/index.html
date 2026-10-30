@@ -59,10 +59,11 @@
 <dialog id="detail-dialog"><div id="detail-content"></div></dialog>
 <dialog id="season-detail-dialog"><div id="season-detail-content"></div></dialog>
 <dialog id="observe-dialog">
-  <div class="dialog-head"><div><span class="eyebrow">MANUAL RECORD</span><h2>记录手动添加结果</h2></div><button id="close-observe" class="icon-button" aria-label="关闭记录窗口">×</button></div>
-  <p id="observe-title"></p><p class="muted">请根据官网的实际结果记录。网盘受理后仍需等待完成，不能直接视为入盘。</p>
+  <div class="dialog-head"><div><span class="eyebrow">MANUAL RECORD</span><h2 id="observe-heading">记录手动添加结果</h2></div><button id="close-observe" class="icon-button" aria-label="关闭记录窗口">×</button></div>
+  <p id="observe-title"></p><ul id="observe-jobs" class="observe-jobs" aria-label="本次记录的任务"></ul><p class="muted">请逐一核实以上任务，填写适用于每一话的实际证据；结果不同的话请分批记录。网盘受理后仍需等待完成，不能直接视为入盘。</p>
   <form id="observe-form">
-    <div class="form-grid"><label>观察到的结果<select id="observe-state"><option value="SUBMITTED">官网已受理</option><option value="DOWNLOADING">任务下载中</option><option value="COMPLETED">已核实文件入盘</option><option value="FAILED">明确失败</option></select></label><label>具体证据<input id="observe-evidence" required minlength="4" placeholder="实际文件名、保存目录或任务提示"></label></div>
+    <div class="form-grid"><label>观察到的结果<select id="observe-state"><option value="SUBMITTED">官网已受理</option><option value="DOWNLOADING">任务下载中</option><option value="COMPLETED">已核实文件入盘</option><option value="FAILED">明确失败</option></select></label><label>具体证据<input id="observe-evidence" required minlength="4" maxlength="2000" placeholder="已核实的话数、实际文件名、保存目录或任务提示"></label></div>
+    <p id="observe-error" class="observation-error" role="alert" hidden></p>
     <div class="form-actions"><span class="muted">保存为“用户确认”，会即时更新历史。</span><button id="save-observe" class="button primary" type="submit">保存记录</button></div>
   </form>
 </dialog>

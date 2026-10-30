@@ -63,6 +63,8 @@ report 从 stdin 或 UTF-8 JSON 文件读取：
 
 人工添加或已存在文件：`python agent_cli.py observe --input observation.json`，包含 job_id、state、evidence、source。source=user 只用于用户明确确认的结果，source=web 用于 Agent 亲自观察的网页结果。允许 SUBMITTED / DOWNLOADING / COMPLETED / FAILED，必须有具体证据；领取或提交中的任务不能被覆盖。用户说“已受理”时不能写成 COMPLETED。Web 也提供“记录手动结果”。
 
+Web 详情支持逐话多选和全选后“核实入盘”，确认前列出具体任务。批量 HTTP 入口为 POST `/api/agent/observe-batch`，参数 job_ids、state、source、evidence；仅允许同一番剧和目录，事务内逐话保存来源和证据，任一冲突整批不写入。批量操作同样需要每话真实证据，不能因勾选就视为已入盘。
+
 ## 并发、中断与真实性
 
 - 领取租约 15 分钟。未开始提交的领取过期后可重新领取；已进入 SUBMITTING 后中断会成为 UNKNOWN，必须先查看网盘。

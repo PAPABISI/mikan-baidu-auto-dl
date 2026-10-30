@@ -246,14 +246,41 @@ def observe(job_id, state, evidence, source):
     evidence = clean_evidence(evidence)
     def update(data):
         job = data["jobs"].get(job_id)
-        if not job or job["state"] in ("CLAIMED", "SUBMITTING", "SUPERSEDED", "COMPLETED"):
-            raise ValueError("任务正在执行、已入盘或已替换，不能覆盖观察结果")
-        job.update(state=state, evidence=evidence, observation_source=source, updated_at=now())
-        if state == "COMPLETED":
-            job["completed_at"] = now()
-        event(data, state, ("用户确认：" if source == "user" else "网页核验：") + evidence,
-              job["mikan_id"], job_id, source=source)
-        return public_job(job)
+        return _record_observation(data, job, state, evidence, source)
+    return transact(update)
+
+
+def _record_observation(data, job, state, evidence, source):
+    if not job or job["state"] in ("CLAIMED", "SUBMITTING", "SUPERSEDED", "COMPLETED"):
+        raise ValueError("任务不存在、正在执行、已入盘或已替换，不能覆盖观察结果")
+    job.update(state=state, evidence=evidence, observation_source=source, updated_at=now())
+    if state == "COMPLETED":
+        job["completed_at"] = now()
+    event(data, state, ("用户确认：" if source == "user" else "网页核验：") + evidence,
+          job["mikan_id"], job["id"], source=source)
+    return public_job(job)
+
+
+def observe_batch(job_ids, state, evidence, source):
+    """原子记录同一番剧目录的多话观察结果，每话保留独立证据和历史。"""
+    if (not isinstance(job_ids, list) or not job_ids
+            or any(not isinstance(value, str) or not value for value in job_ids)
+            or len(set(job_ids)) != len(job_ids)):
+        raise ValueError("请选择不重复的任务编号列表")
+    if state not in ("SUBMITTED", "DOWNLOADING", "COMPLETED", "FAILED") or source not in ("user", "web"):
+        raise ValueError("观察状态或来源无效")
+    evidence = clean_evidence(evidence)
+    def update(data):
+        jobs = [data["jobs"].get(job_id) for job_id in job_ids]
+        if any(not job for job in jobs):
+            raise ValueError("部分任务已不存在，请刷新后重新选择；本批未保存")
+        if len({(job["mikan_id"], job["save_path"]) for job in jobs}) != 1:
+            raise ValueError("批量记录仅支持同一番剧和保存目录")
+        results = []
+        for job in jobs:
+            context = f"{job['series_name']} · 第 {job['episode']} 话 · {job['save_path']}；{evidence}"
+            results.append(_record_observation(data, job, state, clean_evidence(context), source))
+        return results
     return transact(update)
 
 

@@ -6,7 +6,7 @@ const days = ['','周一','周二','周三','周四','周五','周六','周日']
 let library = {series:[],jobs:[],events:[],stats:{},scheduler:{}};
 let selectedId = null, draft = null, editingIndex = null, chosenBangumi = null, searchSequence = 0;
 let pollTimer = null, toastTimer = null, fetching = false;
-let observationJob = null;
+let observationJobs = [], selectedJobs = new Set();
 let renderedData = '';
 let activeView = 'library', availableVariants = [], preferredGroups = [], suggestedBangumi = null;
 
@@ -127,11 +127,37 @@ function renderHistory() {
     '</time><div>' + badge(e.kind) + '</div><div><strong>' + esc(e.mikan_id ? titleFor(e.mikan_id) : '系统') +
     '</strong><p>' + esc(e.message) + '</p></div></div>').join('') : '<div class="empty">还没有操作记录。发现资源后，从第一条记录开始。</div>';
 }
+function canObserve(job) {
+  return !['COMPLETED','CLAIMED','SUBMITTING','SUPERSEDED'].includes(job.state);
+}
+function updateJobSelection() {
+  const choices = $$('#detail-content input[data-job-select]:not(:disabled)');
+  const count = choices.filter(input => input.checked).length;
+  const all = $('#select-all-jobs');
+  all.checked = choices.length > 0 && count === choices.length;
+  all.indeterminate = count > 0 && count < choices.length;
+  all.disabled = choices.length === 0;
+  $('#selected-job-count').textContent = '已选 ' + count + ' 话';
+  $('#verify-selected').disabled = count === 0;
+}
+function openObservation(jobs, state='SUBMITTED') {
+  observationJobs = jobs.map(job => job.id);
+  $('#observe-heading').textContent = state === 'COMPLETED' ? '核实入盘' : '记录手动添加结果';
+  $('#observe-title').textContent = jobs[0].series_name + ' · 共 ' + jobs.length + ' 话';
+  $('#observe-jobs').innerHTML = jobs.map(job => '<li><strong>第 ' + esc(job.episode) + ' 话' +
+    (job.version > 1 ? ' v' + job.version : '') + '</strong><span>' + esc(job.title) + '</span><code>' + esc(job.save_path) + '</code></li>').join('');
+  $('#observe-evidence').value = ''; $('#observe-state').value = state;
+  $('#observe-error').hidden = true;
+  $('#save-observe').textContent = '确认并保存 ' + jobs.length + ' 话';
+  $('#observe-dialog').showModal();
+}
 function renderDetail() {
   const s = library.series.find(item => item.mikan_id === selectedId);
   if (!s) { $('#detail-dialog').close(); return; }
   const image = poster(s.cover_url);
   const jobs = s.jobs || [];
+  const eligibleIds = new Set(jobs.filter(canObserve).map(job => job.id));
+  selectedJobs = new Set([...selectedJobs].filter(id => eligibleIds.has(id)));
   $('#detail-content').innerHTML =
     '<div class="dialog-head"><span class="eyebrow">ANIME / ' + s.mikan_id + '</span><button class="icon-button" data-action="close-detail" aria-label="关闭详情">×</button></div>' +
     '<div class="detail-hero">' + (image ? '<img src="' + esc(image) + '" alt="番剧封面">' : '<div class="poster-placeholder">◒</div>') +
@@ -146,16 +172,20 @@ function renderDetail() {
     (s.bangumi_id ? '<a href="https://bgm.tv/subject/' + Number(s.bangumi_id) + '" target="_blank" rel="noopener">Bangumi 资料 ↗</a>' : '') +
     '<a href="https://pan.baidu.com/disk/main" target="_blank" rel="noopener">百度网盘 ↗</a></div>' +
     '<div class="detail-path"><span>保存目录 <code>' + esc(s.save_path) + '</code></span><button class="text-button" data-action="copy-path">复制</button></div>' +
-    '<div class="table-wrap"><table class="job-table"><thead><tr><th>话数</th><th>字幕组 / 资源</th><th>状态与证据</th><th>操作</th></tr></thead><tbody>' +
-    jobs.map(j => '<tr><td><b>' + esc(j.episode) + '</b>' + (j.version > 1 ? '<div class="muted">v' + j.version + '</div>' : '') +
+    '<div class="job-selection"><span id="selected-job-count" role="status">已选 0 话</span><span class="muted">全选仅包含本番剧可核实的任务</span>' +
+    '<button id="verify-selected" class="button primary" data-action="observe-selected" disabled>核实入盘</button></div>' +
+    '<div class="table-wrap"><table class="job-table"><thead><tr><th class="job-check"><label><input id="select-all-jobs" type="checkbox" aria-label="全选可核实的任务">全选</label></th><th>话数</th><th>字幕组 / 资源</th><th>状态与证据</th><th>操作</th></tr></thead><tbody>' +
+    jobs.map(j => '<tr><td class="job-check"><input type="checkbox" data-job-select="' + esc(j.id) + '" aria-label="选择第 ' + esc(j.episode) + ' 话" ' +
+      (selectedJobs.has(j.id) ? 'checked ' : '') + (canObserve(j) ? '' : 'disabled title="执行中、已入盘或已替换的任务不能勾选"') + '></td><td><b>' + esc(j.episode) + '</b>' + (j.version > 1 ? '<div class="muted">v' + j.version + '</div>' : '') +
       '</td><td>' + esc(j.subtitle_group) + '<div class="muted">' + esc(j.language) + esc(j.subtitle_type || (j.embedded ? '内嵌' : '')) + ' · ' + esc(j.resolution || '未知') + ' · ' + esc(j.size || '') +
       '</div><details><summary class="muted">资源标题</summary><p>' + esc(j.title) + '</p></details></td><td>' + badge(j.state) +
       '<div class="evidence">' + esc(j.evidence || '等待 Agent 在官网添加') + '</div><div class="muted">' + esc(dateText(j.updated_at,true)) +
       (j.observation_source === 'user' ? ' · 用户确认' : '') + '</div></td><td><button class="text-button" data-action="copy-magnet" data-job="' + j.id + '">复制磁力</button>' +
-      (!['COMPLETED','CLAIMED','SUBMITTING','SUPERSEDED'].includes(j.state) ? '<div><button class="text-button" data-action="observe" data-job="' + j.id + '">记录手动结果</button></div>' : '') +
+      (canObserve(j) ? '<div><button class="text-button" data-action="observe" data-job="' + j.id + '">记录手动结果</button></div>' : '') +
       (j.state === 'FAILED' ? '<div><button class="text-button" data-action="retry" data-job="' + j.id + '">重试失败任务</button></div>' : '') +
       '</td></tr>').join('') + '</tbody></table>' + (!jobs.length ? '<p class="muted">尚无资源记录，点击检查新集开始准备。</p>' : '') + '</div>' +
     '<div class="detail-actions"><span class="muted">网盘已受理 ≠ 文件已入盘；未知结果需先核验。</span><button class="button quiet" data-action="edit">编辑追番偏好</button></div>';
+  updateJobSelection();
 }
 async function poll() {
   clearTimeout(pollTimer);
@@ -338,10 +368,11 @@ $('#detail-content').addEventListener('click',async event => {
   if (button.dataset.action === 'copy-path') copy(s.save_path);
   if (button.dataset.action === 'copy-magnet' && job) copy(job.magnet);
   if (button.dataset.action === 'observe' && job) {
-    observationJob = job.id;
-    $('#observe-title').textContent = job.series_name + ' · 第 ' + job.episode + ' 话 · ' + job.save_path;
-    $('#observe-evidence').value = ''; $('#observe-state').value = 'SUBMITTED';
-    $('#observe-dialog').showModal();
+    openObservation([job]);
+  }
+  if (button.dataset.action === 'observe-selected') {
+    const jobs = (s.jobs || []).filter(job => selectedJobs.has(job.id) && canObserve(job));
+    if (jobs.length) openObservation(jobs, 'COMPLETED');
   }
   if (button.dataset.action === 'edit') {
     $('#detail-dialog').close(); openAdd(library.series.findIndex(item => item.mikan_id === selectedId));
@@ -351,10 +382,24 @@ $('#detail-content').addEventListener('click',async event => {
     catch (error) { toast(error.message); }
   }
 });
+$('#detail-content').addEventListener('change',event => {
+  const input = event.target;
+  if (input.id === 'select-all-jobs') {
+    $$('#detail-content input[data-job-select]:not(:disabled)').forEach(choice => {
+      choice.checked = input.checked;
+      if (input.checked) selectedJobs.add(choice.dataset.jobSelect);
+      else selectedJobs.delete(choice.dataset.jobSelect);
+    });
+  } else if (input.matches('input[data-job-select]') && !input.disabled) {
+    if (input.checked) selectedJobs.add(input.dataset.jobSelect);
+    else selectedJobs.delete(input.dataset.jobSelect);
+  } else return;
+  updateJobSelection();
+});
 $('#series-grid').addEventListener('click',event => {
   const card = event.target.closest('[data-series]');
   if (!card) return;
-  selectedId = Number(card.dataset.series); renderDetail(); $('#detail-dialog').showModal();
+  selectedJobs.clear(); selectedId = Number(card.dataset.series); renderDetail(); $('#detail-dialog').showModal();
 });
 $('#series-grid').addEventListener('keydown',event => { if (event.key === 'Enter') event.target.closest('[data-series]')?.click(); });
 $$('nav button').forEach(button => button.onclick = () => switchView(button.dataset.view));
@@ -377,13 +422,22 @@ $('#variant-options').onclick = event => {
   renderVariants();
 };
 $('#close-observe').onclick = () => $('#observe-dialog').close();
+$('#observe-dialog').addEventListener('cancel',event => { if ($('#save-observe').disabled) event.preventDefault(); });
 $('#observe-form').onsubmit = async event => {
-  event.preventDefault(); $('#save-observe').disabled = true;
+  event.preventDefault(); $('#save-observe').disabled = true; $('#close-observe').disabled = true;
+  $('#observe-error').hidden = true;
+  const ids = [...observationJobs];
   try {
-    await api('/api/agent/observe','POST',{job_id:observationJob,state:$('#observe-state').value,evidence:$('#observe-evidence').value.trim(),source:'user'});
-    $('#observe-dialog').close(); toast('结果已记录'); await poll();
-  } catch (error) { toast(error.message); }
-  finally { $('#save-observe').disabled = false; }
+    const batch = ids.length > 1;
+    await api(batch ? '/api/agent/observe-batch' : '/api/agent/observe','POST',{
+      ...(batch ? {job_ids:ids} : {job_id:ids[0]}),state:$('#observe-state').value,evidence:$('#observe-evidence').value.trim(),source:'user'});
+    ids.forEach(id => selectedJobs.delete(id));
+    $('#observe-dialog').close(); toast(ids.length + ' 话结果已记录'); await poll();
+  } catch (error) {
+    $('#observe-error').textContent = '保存未确认：' + error.message + '。请核对最新记录后再操作。';
+    $('#observe-error').hidden = false;
+  }
+  finally { $('#save-observe').disabled = false; $('#close-observe').disabled = false; }
 };
 $('#export').onclick = async () => {
   try {

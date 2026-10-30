@@ -36,6 +36,7 @@ Web 提供：
 - 新增与编辑追番均可下拉选择字幕组，再选择简体/繁体/简繁、内嵌/外挂/内封及清晰度；版本按钮显示可用话数，并可一键填入这些条件。
 - “季度新番”可选择年份、季度，按热度/评分/排名浏览 Bangumi 公开动画，显示评分人数、简介与首播日期，支持分页、季度内搜索和从条目转到蜜柑找资源。
 - “记录手动结果”：先在官网操作，再选择实际结果并填写文件名、目录或任务提示；这类记录标明“用户确认”。受理和完成要分别记录。
+- “核实入盘”：番剧详情支持逐话多选、全选及取消全选；全选仅包含当前番剧可核实的任务，执行中、已入盘和已替换任务不参与。核对确认窗口中的话数、资源和目录，填写适用于每一项的实际证据后保存；每话分别保留用户确认及历史。结果不同请分批记录，任一任务状态冲突时整批不保存。
 
 每次 Agent 回报或手动保存后立即写入数据，页面约 5 秒内刷新。Web 不展示或导出百度凭据。
 
@@ -139,6 +140,7 @@ observe 用于真实存在的文件或人工添加结果，不声称 Agent 执�
 | POST /api/agent/report | body: job_id、token、state、evidence |
 | POST /api/agent/review | body: job_id、state、evidence |
 | POST /api/agent/observe | body: job_id、state、source、evidence |
+| POST /api/agent/observe-batch | body: job_ids（非空且不重复）、state、source、evidence；同一番剧和目录，全部成功或全部不保存，返回 jobs |
 | POST /api/agent/retry | body: job_id、evidence，仅明确失败可重试 |
 | GET /api/mikan/search?q= | 蜜柑搜索 |
 | GET /api/mikan/bangumi/{id} | 字幕组与资源分布 |
