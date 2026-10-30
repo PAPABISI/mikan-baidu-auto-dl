@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""本地 Web 控制台：python web_app.py [--open] [--port 8765]。"""
+"""本地 Web 控制台：python web_app.py [--open] [--port 8785]。"""
 import argparse
 import collections
 import copy
@@ -30,7 +30,7 @@ BASE = storage.BASE
 STATIC_DIR = os.path.join(BASE, "static")
 QR_PNG = os.path.join(STATIC_DIR, "qr.png")
 QR_STATE_FILE = os.path.join(BASE, ".qr_state.json")
-HOST, PORT_DEFAULT = "127.0.0.1", 8765
+HOST, PORT_DEFAULT = "127.0.0.1", 8785
 _qr_lock = threading.Lock()
 _qr_state = {"state": "IDLE", "message": "", "qr_url": "", "expires_at": "", "started_at": ""}
 _refresh_lock = threading.Lock()

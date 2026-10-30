@@ -168,11 +168,13 @@ git commit -m "docs: document development workflow and local-first roadmap"
 启动方式见 README；常用命令为：
 
 ```powershell
-python web_app.py --port 8766
+python web_app.py --port 8786
 python agent_cli.py search "番名" --source mikan
 python agent_cli.py library
 python agent_cli.py queue
 ```
+
+本工作副本默认端口为 8785；同一台机器可能同时存在其他副本的 Web（如 8765/8766），启动时使用独立端口，并以终端打印地址为准。
 
 `prepare` 会访问远端并写入本机队列，只有用户需要实际检查资源时才对真实配置运行，不把它当作无副作用的测试命令。不要运行旧 `auto_dl.py` / `qr_cloud_dl.py` 来试验当前生产流程。
 
